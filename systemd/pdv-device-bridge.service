@@ -1,0 +1,25 @@
+[Unit]
+Description=PDV Device Bridge (balanca + impressora ESC/POS)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=pdvbridge
+Group=pdvbridge
+SupplementaryGroups=dialout lp
+WorkingDirectory=/opt/pdv-device-bridge
+ExecStart=/opt/pdv-device-bridge/.venv/bin/pdv-device-bridge --config /etc/pdv-device-bridge/config.toml
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=2
+WatchdogSec=20
+TimeoutStopSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

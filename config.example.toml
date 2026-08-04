@@ -1,0 +1,46 @@
+[server]
+host = "0.0.0.0"
+port = 8787
+log_level = "info"
+cors_allowed_origins = ["http://localhost:8080"]
+
+[discovery]
+interval_ms = 2000
+
+[scale]
+read_timeout_ms = 800
+cache_max_age_ms = 1500
+max_read_bytes = 200
+command_hex = "04 05"
+
+[printer]
+queue_size = 100
+retry_delays_ms = [200, 500, 1000]
+serial_chunk_size = 512
+serial_chunk_delay_ms = 15
+print_settle_ms = 1000
+write_timeout_ms = 3000
+
+[devices]
+
+[[devices.scales]]
+id = "scale-horti-1"
+path = "/dev/serial/by-id/usb-ScaleVendor_Model123-if00-port0"
+baudrate = 9600
+bytesize = 8
+parity = "N"
+stopbits = 2
+# usb_vid = "0x067B"
+# usb_pid = "0x2303"
+# usb_serial = "A9B8C7"
+
+[[devices.printers]]
+id = "printer-caixa-1"
+path = "/dev/serial/by-id/usb-PrinterVendor_Thermal-if00-port0"
+baudrate = 115200
+bytesize = 8
+parity = "N"
+stopbits = 1
+# usb_vid = "0x04B8"
+# usb_pid = "0x0202"
+# usb_serial = "PRN001"
