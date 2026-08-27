@@ -1,5 +1,6 @@
 import os
 import threading
+import time
 
 import pytest
 
@@ -62,12 +63,15 @@ async def test_scale_worker_reads_from_virtual_tty_and_uses_cache() -> None:
     emulator_thread.start()
 
     try:
+        started_at = time.monotonic()
         first = await worker.read("scale-1", max_age_ms=0)
+        elapsed = time.monotonic() - started_at
         second = await worker.read("scale-1", max_age_ms=1500)
 
         assert first["source"] == "device"
         assert first["grams"] == 245
         assert first["stable"] is True
+        assert elapsed < 0.5
 
         assert second["source"] == "cache"
         assert second["grams"] == 245
@@ -111,3 +115,24 @@ async def test_scale_worker_fails_for_invalid_payload() -> None:
         emulator_thread.join(timeout=1)
         os.close(master_fd)
         os.close(slave_fd)
+
+
+@pytest.mark.asyncio
+async def test_scale_worker_zero_max_age_always_bypasses_cache(monkeypatch) -> None:
+    descriptor = SerialDeviceConfig(device_id="scale-fresh", path="/dev/ttyUSB0")
+    registry = FakeRegistry(descriptor, "/dev/ttyUSB0")
+    worker = ScaleWorker(registry, ScaleRuntimeConfig())
+    responses = iter([b"ST,+0.245kg\r", b"ST,+0.485kg\r"])
+
+    monkeypatch.setattr(
+        "pdv_device_bridge.scale_worker.read_scale_once",
+        lambda *_args, **_kwargs: next(responses),
+    )
+
+    first = await worker.read("scale-fresh", max_age_ms=0)
+    second = await worker.read("scale-fresh", max_age_ms=0)
+
+    assert first["source"] == "device"
+    assert first["grams"] == 245
+    assert second["source"] == "device"
+    assert second["grams"] == 485

@@ -45,7 +45,7 @@ class ScaleWorker:
 
         cached = self._cache.get(scale_id)
         now_ms = _now_epoch_ms()
-        if cached and (now_ms - cached.read_at_epoch_ms) <= effective_max_age_ms:
+        if effective_max_age_ms > 0 and cached and (now_ms - cached.read_at_epoch_ms) <= effective_max_age_ms:
             payload = cached.to_payload()
             payload["source"] = "cache"
             return payload
@@ -55,7 +55,7 @@ class ScaleWorker:
             # Evita corrida entre leitores simultaneos do mesmo dispositivo.
             cached = self._cache.get(scale_id)
             now_ms = _now_epoch_ms()
-            if cached and (now_ms - cached.read_at_epoch_ms) <= effective_max_age_ms:
+            if effective_max_age_ms > 0 and cached and (now_ms - cached.read_at_epoch_ms) <= effective_max_age_ms:
                 payload = cached.to_payload()
                 payload["source"] = "cache"
                 return payload
@@ -69,6 +69,7 @@ class ScaleWorker:
                 path=path,
                 command_bytes=self._config.command_bytes,
                 timeout_ms=self._config.read_timeout_ms,
+                response_quiet_ms=self._config.response_quiet_ms,
                 max_read_bytes=self._config.max_read_bytes,
             )
 

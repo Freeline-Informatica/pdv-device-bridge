@@ -60,13 +60,37 @@ def read_scale_once(
     path: str,
     command_bytes: bytes,
     timeout_ms: int,
+    response_quiet_ms: int,
     max_read_bytes: int,
 ) -> bytes:
     with open_serial_port(descriptor, path, timeout_ms=timeout_ms) as serial_port:
         serial_port.reset_input_buffer()
         serial_port.write(command_bytes)
         serial_port.flush()
-        return bytes(serial_port.read(max_read_bytes))
+
+        max_bytes = max(1, int(max_read_bytes))
+        deadline = time.monotonic() + (max(10, int(timeout_ms)) / 1000)
+        payload = bytearray(serial_port.read(1))
+        if not payload:
+            return b""
+
+        quiet_timeout = max(1, int(response_quiet_ms)) / 1000
+        while len(payload) < max_bytes:
+            if payload[-1] in b"\r\n":
+                break
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+
+            serial_port.timeout = min(quiet_timeout, remaining)
+            next_byte = serial_port.read(1)
+            if not next_byte:
+                break
+
+            payload.extend(next_byte)
+
+        return bytes(payload)
 
 
 def send_printer_payload(

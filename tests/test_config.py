@@ -1,10 +1,13 @@
 from pdv_device_bridge.config import load_config
 
 
-def test_load_config_reads_printer_serial_pacing_fields(tmp_path) -> None:
+def test_load_config_reads_serial_timing_fields(tmp_path) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text(
         """
+[scale]
+response_quiet_ms = 45
+
 [printer]
 queue_size = 5
 retry_delays_ms = [10, 20]
@@ -24,6 +27,7 @@ baudrate = 115200
 
     config = load_config(config_path)
 
+    assert config.scale.response_quiet_ms == 45
     assert config.printer.queue_size == 5
     assert config.printer.retry_delays_ms == (10, 20)
     assert config.printer.serial_chunk_size == 256
@@ -47,6 +51,7 @@ baudrate = 115200
 
     config = load_config(config_path)
 
+    assert config.scale.response_quiet_ms == 30
     assert config.printer.serial_chunk_size == 512
     assert config.printer.serial_chunk_delay_ms == 15
     assert config.printer.print_settle_ms == 1000

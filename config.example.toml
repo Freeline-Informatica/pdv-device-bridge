@@ -9,6 +9,7 @@ interval_ms = 2000
 
 [scale]
 read_timeout_ms = 800
+response_quiet_ms = 30
 cache_max_age_ms = 1500
 max_read_bytes = 200
 command_hex = "04 05"
