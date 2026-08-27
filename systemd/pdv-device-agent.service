@@ -1,0 +1,22 @@
+[Unit]
+Description=PDV Device Control Agent
+After=network-online.target pdv-device-bridge.service
+Wants=network-online.target
+Requires=pdv-device-bridge.service
+
+[Service]
+Type=simple
+ExecStart=/opt/pdv-device-bridge/current/.venv/bin/pdv-device-agent --config /etc/pdv-device-bridge/agent.toml
+Restart=always
+RestartSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/etc/pdv-device-bridge /var/lib/pdv-device-bridge /opt/pdv-device-bridge
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER
+LockPersonality=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

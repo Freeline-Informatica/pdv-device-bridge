@@ -1,0 +1,31 @@
+name: Build arm64 release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: SemVer da release
+        required: true
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e '.[dev]'
+      - run: python -m pip install build
+      - run: pytest
+      - name: Load signing key
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: printf '%s' "$RELEASE_SIGNING_KEY" > "$RUNNER_TEMP/release-key.pem"
+      - run: python scripts/build_release.py --version '${{ inputs.version }}' --private-key "$RUNNER_TEMP/release-key.pem"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pdv-device-bridge-${{ inputs.version }}-arm64
+          path: dist/device-bridge-release/*

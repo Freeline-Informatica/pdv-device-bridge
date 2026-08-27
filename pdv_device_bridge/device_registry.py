@@ -148,6 +148,27 @@ class DeviceRegistry:
 
         return rows
 
+    def serial_ports_snapshot(self) -> list[dict[str, object]]:
+        configured_paths = {
+            str(state.resolved_path or state.configured_path)
+            for state in self._states.values()
+            if state.resolved_path or state.configured_path
+        }
+        rows: list[dict[str, object]] = []
+        for port in list_ports.comports():
+            rows.append({
+                "path": str(port.device),
+                "name": str(getattr(port, "name", "") or ""),
+                "description": str(getattr(port, "description", "") or ""),
+                "manufacturer": str(getattr(port, "manufacturer", "") or "") or None,
+                "product": str(getattr(port, "product", "") or "") or None,
+                "vid": getattr(port, "vid", None),
+                "pid": getattr(port, "pid", None),
+                "serial_number": str(getattr(port, "serial_number", "") or "") or None,
+                "configured": str(port.device) in configured_paths,
+            })
+        return sorted(rows, key=lambda item: str(item["path"]))
+
     async def _discovery_loop(self) -> None:
         while not self._stop_event.is_set():
             try:

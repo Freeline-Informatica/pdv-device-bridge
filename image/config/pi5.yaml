@@ -1,0 +1,10 @@
+device:
+  layer: rpi5
+image:
+  layer: image-rpios
+  boot_part_size: 200%
+  root_part_size: 350%
+  name: freeline-pdv-device-bridge-pi5-arm64
+layer:
+  base: trixie-minbase
+  bridge: freeline-pdv-device-bridge

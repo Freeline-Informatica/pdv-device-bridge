@@ -1,0 +1,14 @@
+[Unit]
+Description=First boot provisioning for Freeline PDV Device Bridge
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/boot/firmware/pdv-device-bridge.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/pdv-device-firstboot
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

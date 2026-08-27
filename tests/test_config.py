@@ -56,3 +56,23 @@ baudrate = 115200
     assert config.printer.serial_chunk_delay_ms == 15
     assert config.printer.print_settle_ms == 1000
     assert config.printer.write_timeout_ms == 3000
+
+
+def test_load_config_requires_pairing_token_when_auth_is_enabled(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("""
+[security]
+require_auth = true
+
+[devices]
+[[devices.printers]]
+id = "printer-1"
+path = "/dev/ttyUSB0"
+""", encoding="utf-8")
+
+    try:
+        load_config(config_path)
+    except ValueError as error:
+        assert "pairing_token" in str(error)
+    else:  # pragma: no cover
+        raise AssertionError("Configuracao sem token deveria falhar")

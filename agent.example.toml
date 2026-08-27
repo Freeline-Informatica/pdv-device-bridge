@@ -1,0 +1,16 @@
+[control]
+base_url = "https://devices.example.com"
+poll_interval_seconds = 60
+state_path = "/var/lib/pdv-device-bridge/agent-state.json"
+
+[local]
+identity_path = "/var/lib/pdv-device-bridge/identity.json"
+bridge_config_path = "/var/lib/pdv-device-bridge/config.toml"
+bridge_service = "pdv-device-bridge.service"
+bridge_health_url = "http://127.0.0.1:8787/health"
+
+[update]
+public_key_path = "/etc/pdv-device-bridge/release-public-key.pem"
+releases_root = "/opt/pdv-device-bridge/releases"
+current_symlink = "/opt/pdv-device-bridge/current"
+activation_hour = 3

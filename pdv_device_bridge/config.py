@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 import tomllib
 
-DEFAULT_CONFIG_PATH = Path("/etc/pdv-device-bridge/config.toml")
+DEFAULT_CONFIG_PATH = Path("/var/lib/pdv-device-bridge/config.toml")
 
 
 @dataclass(slots=True, frozen=True)
@@ -14,6 +14,18 @@ class ServerConfig:
     port: int = 8787
     log_level: str = "info"
     cors_allowed_origins: tuple[str, ...] = ("*",)
+
+
+@dataclass(slots=True, frozen=True)
+class IdentityConfig:
+    state_path: str = "/var/lib/pdv-device-bridge/identity.json"
+    provision_path: str = "/boot/firmware/pdv-device-bridge.json"
+
+
+@dataclass(slots=True, frozen=True)
+class SecurityConfig:
+    require_auth: bool = False
+    pairing_token: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -51,6 +63,8 @@ class SerialDeviceConfig:
 @dataclass(slots=True, frozen=True)
 class BridgeConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
+    identity: IdentityConfig = field(default_factory=IdentityConfig)
+    security: SecurityConfig = field(default_factory=SecurityConfig)
     scale: ScaleRuntimeConfig = field(default_factory=ScaleRuntimeConfig)
     printer: PrinterRuntimeConfig = field(default_factory=PrinterRuntimeConfig)
     discovery_interval_ms: int = 2000
@@ -73,6 +87,21 @@ def load_config(path: Path | str) -> BridgeConfig:
         log_level=str(server_raw.get("log_level", "info")).strip() or "info",
         cors_allowed_origins=_parse_string_tuple(server_raw.get("cors_allowed_origins"), ("*",), "server.cors_allowed_origins"),
     )
+
+    identity_raw = raw.get("identity", {})
+    identity = IdentityConfig(
+        state_path=str(identity_raw.get("state_path", "/var/lib/pdv-device-bridge/identity.json")),
+        provision_path=str(identity_raw.get("provision_path", "/boot/firmware/pdv-device-bridge.json")),
+    )
+
+    security_raw = raw.get("security", {})
+    pairing_token = str(security_raw.get("pairing_token", "")).strip() or None
+    security = SecurityConfig(
+        require_auth=bool(security_raw.get("require_auth", False)),
+        pairing_token=pairing_token,
+    )
+    if security.require_auth and not security.pairing_token:
+        raise ConfigError("security.pairing_token e obrigatorio quando require_auth=true.")
 
     scale_raw = raw.get("scale", {})
     scale = ScaleRuntimeConfig(
@@ -104,6 +133,8 @@ def load_config(path: Path | str) -> BridgeConfig:
 
     return BridgeConfig(
         server=server,
+        identity=identity,
+        security=security,
         scale=scale,
         printer=printer,
         discovery_interval_ms=discovery_interval_ms,

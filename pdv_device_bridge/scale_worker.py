@@ -39,8 +39,10 @@ class ScaleWorker:
         self._config = config
         self._cache: dict[str, CachedScaleReading] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self._last_activity_monotonic: float | None = None
 
     async def read(self, scale_id: str, *, max_age_ms: int | None = None) -> dict[str, object]:
+        self._last_activity_monotonic = time.monotonic()
         effective_max_age_ms = self._config.cache_max_age_ms if max_age_ms is None else max(0, int(max_age_ms))
 
         cached = self._cache.get(scale_id)
@@ -100,6 +102,13 @@ class ScaleWorker:
             }
 
         return result
+
+    def is_idle(self, *, quiet_seconds: float = 60.0) -> bool:
+        if any(lock.locked() for lock in self._locks.values()):
+            return False
+        if self._last_activity_monotonic is None:
+            return True
+        return (time.monotonic() - self._last_activity_monotonic) >= max(0.0, quiet_seconds)
 
 
 def _now_epoch_ms() -> int:

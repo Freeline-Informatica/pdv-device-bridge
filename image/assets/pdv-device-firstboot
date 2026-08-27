@@ -1,0 +1,25 @@
+#!/bin/sh
+set -eu
+
+PROVISION_FILE=/boot/firmware/pdv-device-bridge.json
+ENV_FILE=/etc/pdv-device-firstboot.env
+
+if [ ! -s "$PROVISION_FILE" ]; then
+  echo "Aguardando $PROVISION_FILE; grave o JSON individual na particao de boot." >&2
+  exit 1
+fi
+
+. "$ENV_FILE"
+DEVICE_ID="$(jq -er '.device_id' "$PROVISION_FILE")"
+ENROLLMENT_TOKEN="$(jq -er '.enrollment_token' "$PROVISION_FILE")"
+
+/usr/local/sbin/install-pdv-device-bridge \
+  --control-url "$CONTROL_URL" \
+  --device-id "$DEVICE_ID" \
+  --enrollment-token "$ENROLLMENT_TOKEN" \
+  --bundle-url "$BUNDLE_URL" \
+  --bundle-sha256 "$BUNDLE_SHA256" \
+  --public-key-url "$PUBLIC_KEY_URL"
+
+systemctl disable pdv-device-firstboot.service
+rm -f "$ENV_FILE"

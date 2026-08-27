@@ -4,6 +4,15 @@ port = 8787
 log_level = "info"
 cors_allowed_origins = ["http://localhost:8080"]
 
+[identity]
+state_path = "/var/lib/pdv-device-bridge/identity.json"
+provision_path = "/boot/firmware/pdv-device-bridge.json"
+
+[security]
+# O agente preenche estes campos apos a matricula no control plane.
+require_auth = false
+# pairing_token = "token-lan-gerado-pelo-control-plane"
+
 [discovery]
 interval_ms = 2000
 

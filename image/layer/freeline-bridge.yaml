@@ -1,0 +1,48 @@
+# METABEGIN
+# X-Env-Layer-Name: freeline-pdv-device-bridge
+# X-Env-Layer-Version: 0.2.0
+# X-Env-Layer-Category: application
+# X-Env-Layer-Desc: Headless bootstrap for Freeline PDV Device Bridge
+# X-Env-Layer-Requires: systemd-net-min,systemd-timesyncd
+# X-Env-VarPrefix: bridge
+# X-Env-Var-control-url: https://devices.example.com
+# X-Env-Var-control-url-Required: y
+# X-Env-Var-control-url-Valid: regex:^https://.+$
+# X-Env-Var-control-url-Set: y
+# X-Env-Var-bundle-url: https://downloads.example.com/pdv-device-bridge.tar.gz
+# X-Env-Var-bundle-url-Required: y
+# X-Env-Var-bundle-url-Valid: regex:^https://.+$
+# X-Env-Var-bundle-url-Set: y
+# X-Env-Var-bundle-sha256: replace-with-sha256
+# X-Env-Var-bundle-sha256-Required: y
+# X-Env-Var-bundle-sha256-Valid: regex:^[a-f0-9]{64}$
+# X-Env-Var-bundle-sha256-Set: y
+# X-Env-Var-public-key-url: https://downloads.example.com/release-public-key.pem
+# X-Env-Var-public-key-url-Required: y
+# X-Env-Var-public-key-url-Valid: regex:^https://.+$
+# X-Env-Var-public-key-url-Set: y
+# METAEND
+---
+mmdebstrap:
+  packages:
+    - avahi-daemon
+    - ca-certificates
+    - curl
+    - jq
+    - openssh-server
+    - python3
+    - python3-venv
+    - unattended-upgrades
+  customize-hooks:
+    - install -D -m 0755 ${@SRCROOT}/../install/install.sh $1/usr/local/sbin/install-pdv-device-bridge
+    - install -D -m 0755 ${@SRCROOT}/assets/pdv-device-firstboot $1/usr/local/sbin/pdv-device-firstboot
+    - install -D -m 0644 ${@SRCROOT}/assets/pdv-device-firstboot.service $1/etc/systemd/system/pdv-device-firstboot.service
+    - install -D -m 0644 ${@SRCROOT}/assets/99-freeline-ssh.conf $1/etc/ssh/sshd_config.d/99-freeline.conf
+    - |
+      cat > $1/etc/pdv-device-firstboot.env <<EOF
+      CONTROL_URL=${IGconf_bridge_control_url}
+      BUNDLE_URL=${IGconf_bridge_bundle_url}
+      BUNDLE_SHA256=${IGconf_bridge_bundle_sha256}
+      PUBLIC_KEY_URL=${IGconf_bridge_public_key_url}
+      EOF
+    - $BDEBSTRAP_HOOKS/enable-units "$1" ssh avahi-daemon pdv-device-firstboot

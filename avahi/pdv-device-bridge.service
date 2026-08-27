@@ -1,0 +1,10 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name replace-wildcards="yes">PDV Device Bridge on %h</name>
+  <service>
+    <type>_pdvbridge._tcp</type>
+    <port>8787</port>
+    <txt-record>api=v1</txt-record>
+  </service>
+</service-group>
