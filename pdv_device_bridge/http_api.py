@@ -53,7 +53,10 @@ def create_app(runtime: BridgeRuntime) -> FastAPI:
     async def health() -> dict[str, object]:
         devices = runtime.registry.snapshot()
         available_count = sum(1 for item in devices if item["available"])
-        degraded = available_count < len(devices)
+        scale_health = runtime.scale_worker.health_snapshot()
+        degraded = available_count < len(devices) or any(
+            item["last_error"] for item in scale_health.values()
+        )
 
         return {
             "status": "degraded" if degraded else "ok",
@@ -61,7 +64,7 @@ def create_app(runtime: BridgeRuntime) -> FastAPI:
             "uptime_seconds": round(runtime.uptime_seconds(), 3),
             "devices": devices,
             "workers": {
-                "scale": runtime.scale_worker.health_snapshot(),
+                "scale": scale_health,
                 "printer": runtime.printer_worker.health_snapshot(),
             },
         }

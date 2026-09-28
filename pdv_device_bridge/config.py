@@ -19,6 +19,7 @@ class ServerConfig:
 @dataclass(slots=True, frozen=True)
 class ScaleRuntimeConfig:
     read_timeout_ms: int = 800
+    operation_timeout_ms: int = 2500
     response_quiet_ms: int = 30
     cache_max_age_ms: int = 1500
     max_read_bytes: int = 200
@@ -77,6 +78,7 @@ def load_config(path: Path | str) -> BridgeConfig:
     scale_raw = raw.get("scale", {})
     scale = ScaleRuntimeConfig(
         read_timeout_ms=int(scale_raw.get("read_timeout_ms", 800)),
+        operation_timeout_ms=int(scale_raw.get("operation_timeout_ms", 2500)),
         response_quiet_ms=int(scale_raw.get("response_quiet_ms", 30)),
         cache_max_age_ms=int(scale_raw.get("cache_max_age_ms", 1500)),
         max_read_bytes=int(scale_raw.get("max_read_bytes", 200)),

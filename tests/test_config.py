@@ -7,6 +7,7 @@ def test_load_config_reads_serial_timing_fields(tmp_path) -> None:
         """
 [scale]
 response_quiet_ms = 45
+operation_timeout_ms = 1800
 
 [printer]
 queue_size = 5
@@ -28,6 +29,7 @@ baudrate = 115200
     config = load_config(config_path)
 
     assert config.scale.response_quiet_ms == 45
+    assert config.scale.operation_timeout_ms == 1800
     assert config.printer.queue_size == 5
     assert config.printer.retry_delays_ms == (10, 20)
     assert config.printer.serial_chunk_size == 256
@@ -52,6 +54,7 @@ baudrate = 115200
     config = load_config(config_path)
 
     assert config.scale.response_quiet_ms == 30
+    assert config.scale.operation_timeout_ms == 2500
     assert config.printer.serial_chunk_size == 512
     assert config.printer.serial_chunk_delay_ms == 15
     assert config.printer.print_settle_ms == 1000

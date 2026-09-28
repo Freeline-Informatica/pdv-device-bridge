@@ -1,8 +1,10 @@
+import asyncio
 import os
 import threading
 import time
 
 import pytest
+import serial
 
 from pdv_device_bridge.config import ScaleRuntimeConfig, SerialDeviceConfig
 from pdv_device_bridge.scale_worker import ScaleReadError, ScaleWorker
@@ -136,3 +138,64 @@ async def test_scale_worker_zero_max_age_always_bypasses_cache(monkeypatch) -> N
     assert first["grams"] == 245
     assert second["source"] == "device"
     assert second["grams"] == 485
+
+
+@pytest.mark.asyncio
+async def test_scale_worker_reports_serial_open_error_and_recovers(monkeypatch) -> None:
+    descriptor = SerialDeviceConfig(device_id="scale-eio", path="/dev/ttyUSB0")
+    worker = ScaleWorker(FakeRegistry(descriptor, "/dev/ttyUSB0"), ScaleRuntimeConfig())
+    responses = iter([serial.SerialException(5, "could not open port /dev/ttyUSB0: Input/output error"), b"ST,+0.245kg\r"])
+
+    def read_once(*_args, **_kwargs) -> bytes:
+        result = next(responses)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr("pdv_device_bridge.scale_worker.read_scale_once", read_once)
+
+    with pytest.raises(ScaleReadError, match="could not open port"):
+        await worker.read("scale-eio", max_age_ms=0)
+    assert "could not open port" in worker.health_snapshot()["scale-eio"]["last_error"]
+
+    result = await worker.read("scale-eio", max_age_ms=0)
+    assert result["grams"] == 245
+    assert worker.health_snapshot()["scale-eio"]["last_error"] is None
+
+
+@pytest.mark.asyncio
+async def test_scale_worker_times_out_stuck_serial_read_without_starting_another(monkeypatch) -> None:
+    descriptor = SerialDeviceConfig(device_id="scale-stuck", path="/dev/ttyUSB0")
+    worker = ScaleWorker(
+        FakeRegistry(descriptor, "/dev/ttyUSB0"),
+        ScaleRuntimeConfig(operation_timeout_ms=100),
+    )
+    release = threading.Event()
+    calls = 0
+
+    def blocked_read(*_args, **_kwargs) -> bytes:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            release.wait(timeout=2)
+        return b"ST,+0.245kg\r"
+
+    monkeypatch.setattr("pdv_device_bridge.scale_worker.read_scale_once", blocked_read)
+
+    try:
+        started_at = time.monotonic()
+        with pytest.raises(ScaleReadError, match="Tempo limite"):
+            await worker.read("scale-stuck", max_age_ms=0)
+        assert time.monotonic() - started_at < 0.5
+
+        with pytest.raises(ScaleReadError, match="anterior ainda esta travada"):
+            await worker.read("scale-stuck", max_age_ms=0)
+        assert calls == 1
+        assert worker.health_snapshot()["scale-stuck"]["serial_read_in_progress"] is True
+    finally:
+        release.set()
+
+    await asyncio.sleep(0.05)
+    result = await worker.read("scale-stuck", max_age_ms=0)
+    assert result["grams"] == 245
+    assert calls == 2
