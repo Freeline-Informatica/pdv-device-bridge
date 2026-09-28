@@ -39,6 +39,36 @@ pdv-device-bridge --config ./config.example.toml
 - `POST /v1/printers/{printer_id}/jobs`
 - `GET /v1/printers/{printer_id}/jobs/{job_id}`
 
+## Diagnostico da balanca no Raspberry Pi
+
+Execute no diretorio do projeto, com o ambiente virtual instalado:
+
+```bash
+.venv/bin/python scripts/troubleshoot_scale.py --config /etc/pdv-device-bridge/config.toml
+```
+
+O relatorio confere o caminho `/dev/serial/by-id`, a porta real, permissao do usuario
+atual, enumeracao USB, estado do servico e eventos recentes do kernel. Ele nao
+envia comandos a balanca por padrao. Para conferir uma leitura real pelo bridge:
+
+```bash
+.venv/bin/python scripts/troubleshoot_scale.py --read-api
+```
+
+Para isolar erros de abertura como `cp210x_open - Unable to enable UART`, pare
+temporariamente o servico e abra a porta diretamente, sem enviar bytes:
+
+```bash
+sudo systemctl stop pdv-device-bridge
+.venv/bin/python scripts/troubleshoot_scale.py --open-port
+sudo systemctl start pdv-device-bridge
+```
+
+O teste direto se recusa a abrir a porta enquanto o servico esta ativo. A abertura
+serial pode alterar as linhas de controle DTR/RTS, mesmo sem enviar bytes. Se houver
+mais de uma balanca, indique `--scale-id ID`. Erros antigos do kernel aparecem
+como historico; uma abertura ou leitura nova confirma o estado atual.
+
 ### Exemplo de job ESC/POS bruto
 
 ```bash
