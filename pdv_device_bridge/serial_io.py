@@ -37,7 +37,23 @@ def open_serial_port(
     timeout_ms: int,
     write_timeout_ms: int | None = None,
 ):
-    serial_port = serial.Serial(
+    serial_port = _create_serial_port(descriptor, path, timeout_ms=timeout_ms, write_timeout_ms=write_timeout_ms)
+
+    try:
+        yield serial_port
+    finally:
+        if serial_port.is_open:
+            serial_port.close()
+
+
+def _create_serial_port(
+    descriptor: SerialDeviceConfig,
+    path: str,
+    *,
+    timeout_ms: int,
+    write_timeout_ms: int | None = None,
+):
+    return serial.Serial(
         port=path,
         baudrate=descriptor.baudrate,
         bytesize=_BYTESIZE_MAP[descriptor.bytesize],
@@ -47,11 +63,37 @@ def open_serial_port(
         write_timeout=(None if write_timeout_ms is None else max(0.01, write_timeout_ms / 1000)),
     )
 
-    try:
-        yield serial_port
-    finally:
-        if serial_port.is_open:
-            serial_port.close()
+
+class ScaleSerialSession:
+    """Mantem a porta da balanca aberta durante as leituras sucessivas."""
+
+    def __init__(self, descriptor: SerialDeviceConfig, path: str) -> None:
+        self.descriptor = descriptor
+        self.path = path
+        self._port = None
+
+    def read(self, *, command_bytes: bytes, timeout_ms: int, response_quiet_ms: int, max_read_bytes: int) -> bytes:
+        if self._port is None or not self._port.is_open:
+            self._port = _create_serial_port(self.descriptor, self.path, timeout_ms=timeout_ms)
+
+        try:
+            self._port.timeout = max(0.01, timeout_ms / 1000)
+            return _read_scale_payload(
+                self._port,
+                command_bytes=command_bytes,
+                timeout_ms=timeout_ms,
+                response_quiet_ms=response_quiet_ms,
+                max_read_bytes=max_read_bytes,
+            )
+        except (OSError, serial.SerialException):
+            self.close()
+            raise
+
+    def close(self) -> None:
+        port = self._port
+        self._port = None
+        if port is not None and port.is_open:
+            port.close()
 
 
 def read_scale_once(
@@ -64,33 +106,50 @@ def read_scale_once(
     max_read_bytes: int,
 ) -> bytes:
     with open_serial_port(descriptor, path, timeout_ms=timeout_ms) as serial_port:
-        serial_port.reset_input_buffer()
-        serial_port.write(command_bytes)
-        serial_port.flush()
+        return _read_scale_payload(
+            serial_port,
+            command_bytes=command_bytes,
+            timeout_ms=timeout_ms,
+            response_quiet_ms=response_quiet_ms,
+            max_read_bytes=max_read_bytes,
+        )
 
-        max_bytes = max(1, int(max_read_bytes))
-        deadline = time.monotonic() + (max(10, int(timeout_ms)) / 1000)
-        payload = bytearray(serial_port.read(1))
-        if not payload:
-            return b""
 
-        quiet_timeout = max(1, int(response_quiet_ms)) / 1000
-        while len(payload) < max_bytes:
-            if payload[-1] in b"\r\n":
-                break
+def _read_scale_payload(
+    serial_port,
+    *,
+    command_bytes: bytes,
+    timeout_ms: int,
+    response_quiet_ms: int,
+    max_read_bytes: int,
+) -> bytes:
+    serial_port.reset_input_buffer()
+    serial_port.write(command_bytes)
+    serial_port.flush()
 
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
+    max_bytes = max(1, int(max_read_bytes))
+    deadline = time.monotonic() + (max(10, int(timeout_ms)) / 1000)
+    payload = bytearray(serial_port.read(1))
+    if not payload:
+        return b""
 
-            serial_port.timeout = min(quiet_timeout, remaining)
-            next_byte = serial_port.read(1)
-            if not next_byte:
-                break
+    quiet_timeout = max(1, int(response_quiet_ms)) / 1000
+    while len(payload) < max_bytes:
+        if payload[-1] in b"\r\n":
+            break
 
-            payload.extend(next_byte)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
 
-        return bytes(payload)
+        serial_port.timeout = min(quiet_timeout, remaining)
+        next_byte = serial_port.read(1)
+        if not next_byte:
+            break
+
+        payload.extend(next_byte)
+
+    return bytes(payload)
 
 
 def send_printer_payload(

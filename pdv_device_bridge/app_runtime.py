@@ -46,6 +46,7 @@ class BridgeRuntime:
     async def stop(self) -> None:
         await self.notifier.stop()
         await self.printer_worker.stop()
+        await self.scale_worker.stop()
         await self.registry.stop()
 
     def uptime_seconds(self) -> float:

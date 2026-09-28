@@ -79,6 +79,7 @@ async def test_scale_worker_reads_from_virtual_tty_and_uses_cache() -> None:
         assert second["grams"] == 245
         assert received_commands == [b"\x04\x05"]
     finally:
+        await worker.stop()
         emulator_thread.join(timeout=1)
         os.close(master_fd)
         os.close(slave_fd)
@@ -114,6 +115,7 @@ async def test_scale_worker_fails_for_invalid_payload() -> None:
         with pytest.raises(ScaleReadError):
             await worker.read("scale-2", max_age_ms=0)
     finally:
+        await worker.stop()
         emulator_thread.join(timeout=1)
         os.close(master_fd)
         os.close(slave_fd)
@@ -127,7 +129,7 @@ async def test_scale_worker_zero_max_age_always_bypasses_cache(monkeypatch) -> N
     responses = iter([b"ST,+0.245kg\r", b"ST,+0.485kg\r"])
 
     monkeypatch.setattr(
-        "pdv_device_bridge.scale_worker.read_scale_once",
+        "pdv_device_bridge.scale_worker.ScaleSerialSession.read",
         lambda *_args, **_kwargs: next(responses),
     )
 
@@ -152,7 +154,8 @@ async def test_scale_worker_reports_serial_open_error_and_recovers(monkeypatch) 
             raise result
         return result
 
-    monkeypatch.setattr("pdv_device_bridge.scale_worker.read_scale_once", read_once)
+    monkeypatch.setattr("pdv_device_bridge.scale_worker.ScaleSerialSession.read", read_once)
+    monkeypatch.setattr("pdv_device_bridge.scale_worker.ScaleSerialSession.close", lambda *_args: None)
 
     with pytest.raises(ScaleReadError, match="could not open port"):
         await worker.read("scale-eio", max_age_ms=0)
@@ -161,6 +164,38 @@ async def test_scale_worker_reports_serial_open_error_and_recovers(monkeypatch) 
     result = await worker.read("scale-eio", max_age_ms=0)
     assert result["grams"] == 245
     assert worker.health_snapshot()["scale-eio"]["last_error"] is None
+
+
+@pytest.mark.asyncio
+async def test_scale_worker_reopens_port_after_empty_response(monkeypatch) -> None:
+    descriptor = SerialDeviceConfig(device_id="scale-empty", path="/dev/ttyUSB0")
+    worker = ScaleWorker(FakeRegistry(descriptor, "/dev/ttyUSB0"), ScaleRuntimeConfig())
+    sessions = []
+
+    class FakeSession:
+        def __init__(self, descriptor, path):
+            self.descriptor = descriptor
+            self.path = path
+            self.closed = False
+            sessions.append(self)
+
+        def read(self, **_kwargs):
+            return b"" if len(sessions) == 1 else b"ST,+0.458kg\r"
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr("pdv_device_bridge.scale_worker.ScaleSerialSession", FakeSession)
+
+    with pytest.raises(ScaleReadError, match="Leitura vazia"):
+        await worker.read("scale-empty", max_age_ms=0)
+    result = await worker.read("scale-empty", max_age_ms=0)
+
+    assert result["grams"] == 458
+    assert len(sessions) == 2
+    assert sessions[0].closed
+    await worker.stop()
+    assert sessions[1].closed
 
 
 @pytest.mark.asyncio
@@ -180,7 +215,8 @@ async def test_scale_worker_times_out_stuck_serial_read_without_starting_another
             release.wait(timeout=2)
         return b"ST,+0.245kg\r"
 
-    monkeypatch.setattr("pdv_device_bridge.scale_worker.read_scale_once", blocked_read)
+    monkeypatch.setattr("pdv_device_bridge.scale_worker.ScaleSerialSession.read", blocked_read)
+    monkeypatch.setattr("pdv_device_bridge.scale_worker.ScaleSerialSession.close", lambda *_args: None)
 
     try:
         started_at = time.monotonic()

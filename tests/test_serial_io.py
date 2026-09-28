@@ -2,7 +2,7 @@ import serial
 import pytest
 
 from pdv_device_bridge.config import SerialDeviceConfig
-from pdv_device_bridge.serial_io import read_scale_once, send_printer_payload
+from pdv_device_bridge.serial_io import ScaleSerialSession, read_scale_once, send_printer_payload
 
 
 class FakeSerial:
@@ -130,6 +130,57 @@ def test_read_scale_once_keeps_total_timeout_for_missing_response(monkeypatch) -
 
     assert payload == b""
     assert fake.kwargs["timeout"] == 0.8
+
+
+def test_scale_session_reuses_port_and_closes_it(monkeypatch) -> None:
+    fake = FakeSerial(read_bytes=[bytes([byte]) for byte in b"+0.245kg\r+0.485kg\r"])
+    opens = []
+
+    def serial_factory(**kwargs):
+        opens.append(kwargs)
+        return fake
+
+    monkeypatch.setattr("pdv_device_bridge.serial_io.serial.Serial", serial_factory)
+    session = ScaleSerialSession(SerialDeviceConfig(device_id="scale-1"), "/dev/ttyUSB0")
+
+    first = session.read(command_bytes=b"\x04\x05", timeout_ms=800, response_quiet_ms=30, max_read_bytes=200)
+    second = session.read(command_bytes=b"\x04\x05", timeout_ms=800, response_quiet_ms=30, max_read_bytes=200)
+    session.close()
+
+    assert first == b"+0.245kg\r"
+    assert second == b"+0.485kg\r"
+    assert len(opens) == 1
+    assert fake.writes == [b"\x04\x05", b"\x04\x05"]
+    assert fake.closed
+
+
+def test_scale_session_reopens_after_serial_failure(monkeypatch) -> None:
+    broken = FakeSerial()
+    recovered = FakeSerial(read_bytes=[bytes([byte]) for byte in b"+0.458kg\r"])
+    ports = iter([broken, recovered])
+    opened = []
+
+    def broken_read(_size):
+        raise serial.SerialException("Input/output error")
+
+    def serial_factory(**kwargs):
+        opened.append(kwargs)
+        return next(ports)
+
+    broken.read = broken_read
+    monkeypatch.setattr("pdv_device_bridge.serial_io.serial.Serial", serial_factory)
+    session = ScaleSerialSession(SerialDeviceConfig(device_id="scale-1"), "/dev/ttyUSB0")
+
+    with pytest.raises(serial.SerialException, match="Input/output error"):
+        session.read(command_bytes=b"\x04\x05", timeout_ms=800, response_quiet_ms=30, max_read_bytes=200)
+
+    payload = session.read(command_bytes=b"\x04\x05", timeout_ms=800, response_quiet_ms=30, max_read_bytes=200)
+    session.close()
+
+    assert payload == b"+0.458kg\r"
+    assert len(opened) == 2
+    assert broken.closed
+    assert recovered.closed
 
 
 def test_send_printer_payload_fails_on_incomplete_serial_write(monkeypatch) -> None:

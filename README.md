@@ -105,6 +105,7 @@ pytest
 ## Políticas operacionais implementadas
 
 - Leitura da balança: timeout serial `800ms` e limite da operação `2500ms`, comando `0x04 0x05`, até `200` bytes; encerra em `CR/LF` ou após `30ms` sem novos bytes. Erros de abertura da porta retornam HTTP `502` e aparecem no `/health` como `last_error`, com status `degraded` até uma leitura válida.
+- A porta da balança permanece aberta entre consultas e é reaberta se o caminho USB mudar ou uma operação serial falhar. Assim o adaptador não precisa ser aberto a cada atualização da tela.
 - Cache de peso válido: `1500ms` (ajustável por `max_age_ms`).
 - Fila por impressora: tamanho máximo `100`.
 - Retry de impressão: backoff `200ms`, `500ms`, `1000ms` (1 envio inicial + 3 retries).

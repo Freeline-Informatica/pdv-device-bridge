@@ -9,7 +9,7 @@ import time
 from .config import ScaleRuntimeConfig
 from .device_registry import DeviceRegistry
 from .scale_parser import parse_weight_payload
-from .serial_io import read_scale_once
+from .serial_io import ScaleSerialSession
 
 
 class ScaleReadError(RuntimeError):
@@ -45,6 +45,7 @@ class ScaleWorker:
         self._locks: dict[str, asyncio.Lock] = {}
         self._serial_reads: dict[str, asyncio.Task[bytes]] = {}
         self._last_errors: dict[str, str] = {}
+        self._sessions: dict[str, ScaleSerialSession] = {}
 
     async def read(self, scale_id: str, *, max_age_ms: int | None = None) -> dict[str, object]:
         effective_max_age_ms = self._config.cache_max_age_ms if max_age_ms is None else max(0, int(max_age_ms))
@@ -74,11 +75,15 @@ class ScaleWorker:
 
             descriptor = self._registry.get_descriptor("scale", scale_id)
             path = await self._registry.resolve_path("scale", scale_id)
+            session = self._sessions.get(scale_id)
+            if session is None or session.path != path or session.descriptor != descriptor:
+                if session is not None:
+                    await asyncio.to_thread(session.close)
+                session = ScaleSerialSession(descriptor, path)
+                self._sessions[scale_id] = session
 
             serial_read = asyncio.create_task(asyncio.to_thread(
-                read_scale_once,
-                descriptor,
-                path=path,
+                session.read,
                 command_bytes=self._config.command_bytes,
                 timeout_ms=self._config.read_timeout_ms,
                 response_quiet_ms=self._config.response_quiet_ms,
@@ -105,6 +110,8 @@ class ScaleWorker:
 
             parsed = parse_weight_payload(payload_bytes)
             if parsed is None:
+                await asyncio.to_thread(session.close)
+                self._sessions.pop(scale_id, None)
                 message = "Leitura vazia ou invalida retornada pela balanca."
                 self._last_errors[scale_id] = message
                 raise ScaleReadError(message)
@@ -122,6 +129,14 @@ class ScaleWorker:
             result = reading.to_payload()
             result["source"] = "device"
             return result
+
+    async def stop(self) -> None:
+        for scale_id, session in list(self._sessions.items()):
+            active_read = self._serial_reads.get(scale_id)
+            if active_read and not active_read.done():
+                continue
+            await asyncio.to_thread(session.close)
+        self._sessions.clear()
 
     def health_snapshot(self) -> dict[str, dict[str, object]]:
         result: dict[str, dict[str, object]] = {}
