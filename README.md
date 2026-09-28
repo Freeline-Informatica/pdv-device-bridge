@@ -18,6 +18,25 @@ python -m pip install -U pip
 python -m pip install -e .
 ```
 
+## Atualização de uma instalação via Git
+
+No Raspberry Pi, execute como o usuário dono do checkout em `/opt/pdv-device-bridge`:
+
+```bash
+cd /opt/pdv-device-bridge
+./scripts/update.sh
+```
+
+O script exige uma branch com upstream e checkout sem alterações locais. Ele faz
+`git pull --ff-only`, instala a revisão recebida na `.venv`, confere o comando
+do bridge, reinicia `pdv-device-bridge.service` com `sudo` quando necessário e
+confere a resposta de `/health` (inclusive `degraded` quando um dispositivo
+está desconectado).
+Se o Git ou a instalação falhar, o serviço não é reiniciado. Para atualizar uma
+instalação de desenvolvimento sem `systemd`, use `./scripts/update.sh --no-restart`.
+Execute o script novamente se precisar reinstalar as dependências sem haver
+novos commits.
+
 ## Configuração
 
 1. Copie `config.example.toml` para `/etc/pdv-device-bridge/config.toml`.
