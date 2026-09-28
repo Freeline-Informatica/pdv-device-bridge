@@ -88,6 +88,10 @@ serial pode alterar as linhas de controle DTR/RTS, mesmo sem enviar bytes. Se ho
 mais de uma balanca, indique `--scale-id ID`. Erros antigos do kernel aparecem
 como historico; uma abertura ou leitura nova confirma o estado atual.
 
+Com `--read-api`, o diagnostico tenta ate tres leituras novas. Se uma falhar e a
+seguinte funcionar, informa a falha intermitente como aviso. Nesse modo, os eventos
+USB mostrados sao apenas os registrados durante a execucao do teste.
+
 ### Exemplo de job ESC/POS bruto
 
 ```bash

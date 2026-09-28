@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
 import os
 from pathlib import Path
 import stat
 import subprocess
 import sys
+import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import urlopen
@@ -85,19 +87,20 @@ def show_port(descriptor: SerialDeviceConfig) -> str | None:
     return str(resolved)
 
 
-def show_kernel_events(device_path: str | None) -> None:
-    status, output = run_command("journalctl", "-k", "-b", "--since", "15 minutes ago", "-n", "200", "--no-pager", "-o", "short-iso")
+def show_kernel_events(device_path: str | None, *, since: str | None = None) -> None:
+    status, output = run_command("journalctl", "-k", "-b", "--since", since or "15 minutes ago", "-n", "200", "--no-pager", "-o", "short-iso")
     if status != 0:
         print(f"[AVISO] Nao foi possivel ler o journal do kernel: {output}")
         return
 
     name = Path(device_path).name.lower() if device_path else "ttyusb"
     relevant = [line for line in output.splitlines() if any(token in line.lower() for token in (name, "cp210x", "usb disconnect"))]
-    print(f"Eventos USB/serial recentes ({len(relevant)} encontrados; ultimos 8):")
+    period = "durante este teste" if since else "nos ultimos 15 minutos (historico)"
+    print(f"Eventos USB/serial {period} ({len(relevant)} encontrados; ultimos 8):")
     for line in relevant[-8:]:
         print(f"  {line}")
     for finding in kernel_findings("\n".join(relevant)):
-        print(f"[HISTORICO] {finding}")
+        print(f"[{'AVISO' if since else 'HISTORICO'}] {finding}")
 
 
 def probe_open(descriptor: SerialDeviceConfig, path: str) -> bool:
@@ -118,23 +121,34 @@ def probe_open(descriptor: SerialDeviceConfig, path: str) -> bool:
     return True
 
 
-def read_bridge(port: int, scale_id: str) -> bool:
+def read_bridge(port: int, scale_id: str, *, attempts: int = 3) -> bool:
     url = f"http://127.0.0.1:{port}/v1/scales/{quote(scale_id, safe='')}/read?max_age_ms=0"
-    try:
-        with urlopen(url, timeout=4) as response:
-            payload = json.load(response)
-    except HTTPError as exc:
-        detail = exc.read(500).decode("utf-8", errors="replace")
-        print(f"[FALHA] Bridge retornou HTTP {exc.code}: {detail}")
-        return False
-    except (URLError, TimeoutError, ValueError) as exc:
-        print(f"[FALHA] Nao foi possivel ler via bridge: {exc}")
-        return False
-    print(f"[OK] Leitura do dispositivo: {payload.get('grams')} g; "
-          f"origem={payload.get('source')}; stable={payload.get('stable')}")
-    print(f"Resposta bruta: {str(payload.get('raw', ''))[:200]!r}")
-    print("Nota: stable=True pode ser padrao do parser quando o protocolo nao informa estabilidade.")
-    return True
+    failures: list[str] = []
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            with urlopen(url, timeout=4) as response:
+                payload = json.load(response)
+        except HTTPError as exc:
+            detail = exc.read(500).decode("utf-8", errors="replace")
+            failures.append(f"HTTP {exc.code}: {detail}")
+        except (URLError, TimeoutError, ValueError) as exc:
+            failures.append(str(exc))
+        else:
+            if failures:
+                print(f"[AVISO] {len(failures)} tentativa(s) falharam antes desta leitura valida: {'; '.join(failures)}")
+            print(f"[OK] Leitura do dispositivo: {payload.get('grams')} g; "
+                  f"origem={payload.get('source')}; stable={payload.get('stable')}")
+            print(f"Resposta bruta: {str(payload.get('raw', ''))[:200]!r}")
+            print("Nota: stable=True pode ser padrao do parser quando o protocolo nao informa estabilidade.")
+            return True
+
+        if attempt < attempts:
+            time.sleep(0.5)
+
+    print(f"[FALHA] Nenhuma das {max(1, attempts)} tentativas retornou uma leitura valida.")
+    for attempt, failure in enumerate(failures, start=1):
+        print(f"  Tentativa {attempt}: {failure}")
+    return False
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -167,6 +181,7 @@ def main(argv: list[str] | None = None) -> int:
 
     path = show_port(descriptor)
     result = 0 if path else 1
+    test_started_at = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S") if (args.open_port or args.read_api) else None
 
     if args.open_port:
         if active:
@@ -178,7 +193,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.read_api and not read_bridge(config.server.port, descriptor.device_id):
         result = 1
 
-    show_kernel_events(path)
+    show_kernel_events(path, since=test_started_at)
 
     if not args.open_port and not args.read_api:
         print("Para testar abertura: pare o servico e execute com --open-port.")
