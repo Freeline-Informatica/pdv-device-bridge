@@ -86,6 +86,40 @@ async def test_scale_worker_reads_from_virtual_tty_and_uses_cache() -> None:
 
 
 @pytest.mark.asyncio
+async def test_virtual_tty_recovers_from_silent_empty_plate_to_weight() -> None:
+    master_fd, slave_fd = os.openpty()
+    slave_path = os.ttyname(slave_fd)
+    descriptor = SerialDeviceConfig(device_id="scale-silent", path=slave_path)
+    worker = ScaleWorker(
+        FakeRegistry(descriptor, slave_path),
+        ScaleRuntimeConfig(read_timeout_ms=100),
+    )
+
+    def device_emulator() -> None:
+        try:
+            os.read(master_fd, 2)
+            os.read(master_fd, 2)
+            os.write(master_fd, b"ST,+0.485kg\r")
+        except OSError:
+            pass
+
+    emulator_thread = threading.Thread(target=device_emulator, daemon=True)
+    emulator_thread.start()
+    try:
+        empty = await worker.read("scale-silent", max_age_ms=0)
+        weight = await worker.read("scale-silent", max_age_ms=0)
+        assert empty["state"] == "empty"
+        assert empty["grams"] == 0
+        assert weight["state"] == "weight"
+        assert weight["grams"] == 485
+    finally:
+        await worker.stop()
+        emulator_thread.join(timeout=1)
+        os.close(master_fd)
+        os.close(slave_fd)
+
+
+@pytest.mark.asyncio
 async def test_scale_worker_fails_for_invalid_payload() -> None:
     master_fd, slave_fd = os.openpty()
     slave_path = os.ttyname(slave_fd)
@@ -167,7 +201,31 @@ async def test_scale_worker_reports_serial_open_error_and_recovers(monkeypatch) 
 
 
 @pytest.mark.asyncio
-async def test_scale_worker_reopens_port_after_empty_response(monkeypatch) -> None:
+async def test_silence_does_not_clear_a_serial_failure(monkeypatch) -> None:
+    descriptor = SerialDeviceConfig(device_id="scale-fault", path="/dev/ttyUSB0")
+    worker = ScaleWorker(FakeRegistry(descriptor, "/dev/ttyUSB0"), ScaleRuntimeConfig())
+    responses = iter([serial.SerialException("EPIPE"), b"", b"ST,+0.000kg\r"])
+
+    def read_once(*_args, **_kwargs) -> bytes:
+        result = next(responses)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr("pdv_device_bridge.scale_worker.ScaleSerialSession.read", read_once)
+    monkeypatch.setattr("pdv_device_bridge.scale_worker.ScaleSerialSession.close", lambda *_args: None)
+
+    with pytest.raises(ScaleReadError, match="EPIPE"):
+        await worker.read("scale-fault", max_age_ms=0)
+    empty = await worker.read("scale-fault", max_age_ms=0)
+    assert empty["state"] == "empty"
+    assert "EPIPE" in worker.health_snapshot()["scale-fault"]["last_error"]
+    await worker.read("scale-fault", max_age_ms=0)
+    assert worker.health_snapshot()["scale-fault"]["last_error"] is None
+
+
+@pytest.mark.asyncio
+async def test_scale_worker_treats_no_bytes_as_empty_without_reopening_port(monkeypatch) -> None:
     descriptor = SerialDeviceConfig(device_id="scale-empty", path="/dev/ttyUSB0")
     worker = ScaleWorker(FakeRegistry(descriptor, "/dev/ttyUSB0"), ScaleRuntimeConfig())
     sessions = []
@@ -179,23 +237,76 @@ async def test_scale_worker_reopens_port_after_empty_response(monkeypatch) -> No
             self.closed = False
             sessions.append(self)
 
+        reads = 0
+
         def read(self, **_kwargs):
-            return b"" if len(sessions) == 1 else b"ST,+0.458kg\r"
+            self.reads += 1
+            return b"" if self.reads == 1 else b"ST,+0.458kg\r"
 
         def close(self):
             self.closed = True
 
     monkeypatch.setattr("pdv_device_bridge.scale_worker.ScaleSerialSession", FakeSession)
 
-    with pytest.raises(ScaleReadError, match="Leitura vazia"):
-        await worker.read("scale-empty", max_age_ms=0)
+    empty = await worker.read("scale-empty", max_age_ms=0)
+    assert empty["state"] == "empty"
+    assert empty["grams"] == 0
+    assert empty["stable"] is None
+    assert worker.health_snapshot()["scale-empty"]["last_error"] is None
     result = await worker.read("scale-empty", max_age_ms=0)
 
     assert result["grams"] == 458
-    assert len(sessions) == 2
-    assert sessions[0].closed
+    assert len(sessions) == 1
+    assert not sessions[0].closed
     await worker.stop()
-    assert sessions[1].closed
+    assert sessions[0].closed
+
+
+@pytest.mark.asyncio
+async def test_scale_worker_accepts_explicit_zero_and_rejects_invalid_bytes(monkeypatch) -> None:
+    descriptor = SerialDeviceConfig(device_id="scale-zero", path="/dev/ttyUSB0")
+    worker = ScaleWorker(FakeRegistry(descriptor, "/dev/ttyUSB0"), ScaleRuntimeConfig())
+    responses = iter([b"ST,+0.000kg\r", b"@@@@"])
+    monkeypatch.setattr(
+        "pdv_device_bridge.scale_worker.ScaleSerialSession.read",
+        lambda *_args, **_kwargs: next(responses),
+    )
+    monkeypatch.setattr("pdv_device_bridge.scale_worker.ScaleSerialSession.close", lambda *_args: None)
+
+    zero = await worker.read("scale-zero", max_age_ms=0)
+    assert zero["state"] == "empty"
+    assert zero["grams"] == 0
+    with pytest.raises(ScaleReadError, match="Resposta invalida"):
+        await worker.read("scale-zero", max_age_ms=0)
+    assert worker.health_snapshot()["scale-zero"]["last_error"]
+
+
+@pytest.mark.asyncio
+async def test_scale_stream_shares_one_read_between_two_subscribers(monkeypatch) -> None:
+    descriptor = SerialDeviceConfig(device_id="scale-stream", path="/dev/ttyUSB0")
+    worker = ScaleWorker(FakeRegistry(descriptor, "/dev/ttyUSB0"), ScaleRuntimeConfig())
+    reads = 0
+
+    async def fake_read(*_args, **_kwargs):
+        nonlocal reads
+        reads += 1
+        return {"state": "empty", "grams": 0, "kilograms": 0.0, "read_at": "now"}
+
+    monkeypatch.setattr(worker, "read", fake_read)
+    first = worker.stream("scale-stream")
+    second = worker.stream("scale-stream")
+    try:
+        events = await asyncio.gather(anext(first), anext(second))
+        assert reads == 1
+        assert [event["state"] for event in events] == ["empty", "empty"]
+    finally:
+        await first.aclose()
+        await second.aclose()
+        await asyncio.sleep(0.12)
+        assert "scale-stream" not in worker._stream_tasks
+        await worker.stop()
+
+    assert not worker._subscribers
 
 
 @pytest.mark.asyncio

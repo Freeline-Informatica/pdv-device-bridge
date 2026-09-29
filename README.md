@@ -44,6 +44,8 @@ novos commits.
 3. O bind HTTP deve permanecer na LAN (ex.: `0.0.0.0:8787` em rede interna).
 4. Defina `server.cors_allowed_origins` com as origens do PDV web (ex.: `http://localhost:8080` no desenvolvimento).
 
+Para registrar o Raspberry no Device Control, instale `systemd/pdv-device-agent.service`, ajustando o `ExecStart` para o caminho real da `.venv` no aparelho, configure `agent.example.toml` em `/etc/pdv-device-bridge/agent.toml` e use o JSON de pré-vínculo fornecido pelo serviço central como arquivo de provisionamento. O agente mantém UUID e credenciais em `/var/lib/pdv-device-bridge` e envia heartbeat e eventos pelo canal de saída. Durante a migração de terminais com URL manual, mantenha `local.enforce_lan_auth = false`; ative a autenticação LAN só depois de migrá-los para o UUID do bridge. Essa mudança reinicia o bridge e deve ser feita com os periféricos ociosos.
+
 ## Execução local
 
 ```bash
@@ -55,6 +57,7 @@ pdv-device-bridge --config ./config.example.toml
 - `GET /health`
 - `GET /v1/devices`
 - `GET /v1/scales/{scale_id}/read?max_age_ms=1500`
+- `GET /v1/scales/{scale_id}/events` (SSE; evento `scale` com `state=weight|empty|error`)
 - `POST /v1/printers/{printer_id}/jobs`
 - `GET /v1/printers/{printer_id}/jobs/{job_id}`
 
@@ -127,9 +130,10 @@ pytest
 
 ## Políticas operacionais implementadas
 
-- Leitura da balança: timeout serial `800ms` e limite da operação `2500ms`, comando `0x04 0x05`, até `200` bytes; encerra em `CR/LF` ou após `30ms` sem novos bytes. Erros de abertura da porta retornam HTTP `502` e aparecem no `/health` como `last_error`, com status `degraded` até uma leitura válida.
+- Leitura da balança: timeout serial `800ms` e limite da operação `2500ms`, comando `0x04 0x05`, até `200` bytes; encerra em `CR/LF` ou após `30ms` sem novos bytes. Uma resposta sem bytes ou peso zero retorna `state=empty`, `grams=0` e HTTP `200`; payload não reconhecido e falhas seriais retornam HTTP `502` e degradam `/health`. Um payload inválido é registrado em hexadecimal no log para diagnóstico do protocolo.
+- O stream SSE faz leituras novas enquanto houver assinantes, com uma única rotina por balança. Para avaliar a meta de 500 ms, use `scripts/troubleshoot_scale.py --read-api` para ver a duração HTTP e filme a colocação do item junto com a tela do PDV. Ajuste `scale.read_timeout_ms` no Raspberry somente após medir as respostas reais; o padrão de 800 ms pode impedir essa meta quando o prato vazio não responde.
 - A porta da balança permanece aberta entre consultas e é reaberta se o caminho USB mudar ou uma operação serial falhar. Assim o adaptador não precisa ser aberto a cada atualização da tela.
-- Cache de peso válido: `1500ms` (ajustável por `max_age_ms`).
+- Cache da última leitura, inclusive peso zero: `1500ms` (ajustável por `max_age_ms`; as telas ao vivo pedem leitura nova).
 - Fila por impressora: tamanho máximo `100`.
 - Retry de impressão: backoff `200ms`, `500ms`, `1000ms` (1 envio inicial + 3 retries).
 - Escrita da impressora: chunks de `512` bytes, pausa `15ms` entre chunks, settle final `1000ms`, timeout de escrita `3000ms`.

@@ -33,7 +33,7 @@ def main() -> None:
     except ConfigError as exc:
         parser.error(f"Configuracao invalida: {exc}")
 
-    runtime = BridgeRuntime.from_config(bridge_config)
+    runtime = BridgeRuntime.from_config(bridge_config, config_path=args.config)
     app = create_app(runtime)
 
     uvicorn.run(

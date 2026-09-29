@@ -125,19 +125,21 @@ def read_bridge(port: int, scale_id: str, *, attempts: int = 3) -> bool:
     url = f"http://127.0.0.1:{port}/v1/scales/{quote(scale_id, safe='')}/read?max_age_ms=0"
     failures: list[str] = []
     for attempt in range(1, max(1, attempts) + 1):
+        started_at = time.monotonic()
         try:
             with urlopen(url, timeout=4) as response:
                 payload = json.load(response)
         except HTTPError as exc:
             detail = exc.read(500).decode("utf-8", errors="replace")
-            failures.append(f"HTTP {exc.code}: {detail}")
+            failures.append(f"HTTP {exc.code} em {(time.monotonic() - started_at) * 1000:.0f} ms: {detail}")
         except (URLError, TimeoutError, ValueError) as exc:
-            failures.append(str(exc))
+            failures.append(f"{exc} em {(time.monotonic() - started_at) * 1000:.0f} ms")
         else:
             if failures:
                 print(f"[AVISO] {len(failures)} tentativa(s) falharam antes desta leitura valida: {'; '.join(failures)}")
             print(f"[OK] Leitura do dispositivo: {payload.get('grams')} g; "
-                  f"origem={payload.get('source')}; stable={payload.get('stable')}")
+                  f"estado={payload.get('state')}; origem={payload.get('source')}; "
+                  f"stable={payload.get('stable')}; HTTP={(time.monotonic() - started_at) * 1000:.0f} ms")
             print(f"Resposta bruta: {str(payload.get('raw', ''))[:200]!r}")
             print("Nota: stable=True pode ser padrao do parser quando o protocolo nao informa estabilidade.")
             return True
