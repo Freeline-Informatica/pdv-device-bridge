@@ -57,9 +57,20 @@ pdv-device-bridge --config ./config.example.toml
 - `GET /health`
 - `GET /v1/devices`
 - `GET /v1/scales/{scale_id}/read?max_age_ms=1500`
+- `GET /v1/scales/{scale_id}/readings?limit=50` (leituras recentes em memória)
 - `GET /v1/scales/{scale_id}/events` (SSE; evento `scale` com `state=weight|empty|error`)
 - `POST /v1/printers/{printer_id}/jobs`
 - `GET /v1/printers/{printer_id}/jobs/{job_id}`
+- `GET /v1/printers/{printer_id}/jobs?limit=50` (fila e jobs recentes)
+- `POST /v1/printers/{printer_id}/jobs/{job_id}/retry` (reenvia um job com falha)
+
+O histórico de pesagens mantém até 500 leituras por balança e o de impressões,
+até 500 jobs por impressora enquanto o processo do bridge estiver ativo. Ambos
+são voláteis e são limpos ao reiniciar o serviço. `/health` e `/v1/status`
+informam a versão instalada. Um reenvio cria um novo `job_id`,
+aponta para o job original em `retry_of` e pode imprimir duplicado se a falha
+original ocorreu depois de os dados chegarem à impressora. Jobs em andamento ou
+já impressos não podem ser reenviados por essa operação.
 
 ## Diagnostico da balanca no Raspberry Pi
 

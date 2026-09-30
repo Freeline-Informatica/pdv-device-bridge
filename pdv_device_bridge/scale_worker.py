@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
@@ -50,6 +51,7 @@ class ScaleWorker:
         self._sessions: dict[str, ScaleSerialSession] = {}
         self._subscribers: dict[str, set[asyncio.Queue[dict[str, object]]]] = {}
         self._stream_tasks: dict[str, asyncio.Task[None]] = {}
+        self._history: dict[str, deque[dict[str, object]]] = {}
 
     async def read(self, scale_id: str, *, max_age_ms: int | None = None) -> dict[str, object]:
         effective_max_age_ms = self._config.cache_max_age_ms if max_age_ms is None else max(0, int(max_age_ms))
@@ -131,6 +133,8 @@ class ScaleWorker:
             )
 
             self._cache[scale_id] = reading
+            history = self._history.setdefault(scale_id, deque(maxlen=500))
+            history.appendleft(reading.to_payload())
             # Silence alone cannot prove that a failed serial link recovered.
             # Only a parsed frame confirms that communication is healthy again.
             if parsed is not None:
@@ -205,6 +209,9 @@ class ScaleWorker:
             }
 
         return result
+
+    def recent_readings(self, scale_id: str, *, limit: int = 50) -> list[dict[str, object]]:
+        return list(self._history.get(scale_id, ()))[:max(1, min(int(limit), 500))]
 
     def is_idle(self) -> bool:
         return not any(self._subscribers.values()) and not any(
