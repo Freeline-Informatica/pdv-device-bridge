@@ -62,7 +62,8 @@ class ControlAgent:
         if not self.state.device_token:
             await self._enroll()
         await self._sync_bridge_identity()
-        if self.state.mqtt and self.state.pairing_token and self.remote is None:
+        local_status = await self._local_status()
+        if self.state.mqtt and self.state.pairing_token and self.remote is None and isinstance(local_status.get("identity"), dict):
             self.remote = RemoteMqttClient(
                 device_id=self.identity.device_id,
                 credentials=self.state.mqtt,
@@ -74,7 +75,6 @@ class ControlAgent:
             self.presence_task = asyncio.create_task(self.remote.run_presence())
         headers = self._headers()
         heartbeat = self._heartbeat_payload()
-        local_status = await self._local_status()
         heartbeat["peripherals"] = local_status.get("devices", [])
         response = await self.client.post("/api/v1/device/heartbeat", headers=headers, json=heartbeat)
         response.raise_for_status()
@@ -210,6 +210,10 @@ class ControlAgent:
         status_url = self.config.bridge_health_url.rsplit("/health", 1)[0] + "/v1/status"
         async with httpx.AsyncClient(timeout=3) as local:
             response = await local.get(status_url, headers={"Authorization": f"Bearer {token}"})
+            if response.status_code == 404:
+                health = await local.get(self.config.bridge_health_url)
+                health.raise_for_status()
+                return {"devices": health.json().get("devices", [])}
             response.raise_for_status()
             return response.json()
 
