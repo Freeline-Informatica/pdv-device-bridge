@@ -7,12 +7,9 @@ from datetime import datetime, timezone
 import hmac
 import json
 
-from typing import Annotated
-
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 from . import __version__
@@ -51,14 +48,15 @@ class ConfigurationApplyRequest(BaseModel):
 
 
 def create_app(runtime: BridgeRuntime) -> FastAPI:
-    bearer = HTTPBearer(auto_error=False)
-
     def require_lan_access(
-        credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+        request: Request,
     ) -> None:
         if not runtime.config.security.require_auth:
             return
-        supplied = credentials.credentials if credentials and credentials.scheme.lower() == "bearer" else ""
+        authorization = request.headers.get("Authorization", "")
+        scheme, separator, supplied = authorization.partition(" ")
+        if not separator or scheme.lower() != "bearer":
+            supplied = ""
         expected = runtime.config.security.pairing_token or ""
         if not supplied or not hmac.compare_digest(supplied, expected):
             raise HTTPException(status_code=401, detail="Credencial LAN invalida.")
