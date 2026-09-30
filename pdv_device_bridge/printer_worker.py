@@ -159,6 +159,9 @@ class PrinterWorker:
 
         return snapshot
 
+    def is_idle(self) -> bool:
+        return not self._active_jobs and all(queue.empty() for queue in self._queues.values())
+
     async def _run_worker(self, printer_id: str) -> None:
         queue = self._queues[printer_id]
 
