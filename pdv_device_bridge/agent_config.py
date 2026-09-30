@@ -23,6 +23,7 @@ class AgentConfig:
     bridge_service: str = "pdv-device-bridge.service"
     bridge_health_url: str = "http://127.0.0.1:8787/health"
     enforce_lan_auth: bool = False
+    manage_bridge: bool = True
 
 
 def load_agent_config(path: Path | str) -> AgentConfig:
@@ -50,4 +51,5 @@ def load_agent_config(path: Path | str) -> AgentConfig:
         bridge_service=str(local.get("bridge_service", "pdv-device-bridge.service")),
         bridge_health_url=str(local.get("bridge_health_url", "http://127.0.0.1:8787/health")),
         enforce_lan_auth=bool(local.get("enforce_lan_auth", False)),
+        manage_bridge=bool(local.get("manage_bridge", True)),
     )

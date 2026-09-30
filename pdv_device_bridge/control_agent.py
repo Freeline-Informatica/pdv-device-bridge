@@ -50,7 +50,8 @@ class ControlAgent:
         self.presence_task: asyncio.Task[None] | None = None
 
     async def run_forever(self) -> None:
-        self.updater.recover_interrupted_update()
+        if self.config.manage_bridge:
+            self.updater.recover_interrupted_update()
         while True:
             try:
                 await self.run_once()
@@ -61,7 +62,8 @@ class ControlAgent:
     async def run_once(self) -> None:
         if not self.state.device_token:
             await self._enroll()
-        await self._sync_bridge_identity()
+        if self.config.manage_bridge:
+            await self._sync_bridge_identity()
         local_status = await self._local_status()
         if self.state.mqtt and self.state.pairing_token and self.remote is None and isinstance(local_status.get("identity"), dict):
             self.remote = RemoteMqttClient(
@@ -80,10 +82,11 @@ class ControlAgent:
         response.raise_for_status()
         control = response.json()
         await self._handle_credentials(control)
-        await self._handle_configuration(control)
-        desired = control.get("desired_release")
-        if desired:
-            await self._handle_release(ReleaseManifest.from_payload(desired))
+        if self.config.manage_bridge:
+            await self._handle_configuration(control)
+            desired = control.get("desired_release")
+            if desired:
+                await self._handle_release(ReleaseManifest.from_payload(desired))
 
     async def close(self) -> None:
         if self.presence_task:
