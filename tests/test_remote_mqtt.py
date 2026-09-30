@@ -7,6 +7,21 @@ import pytest
 from pdv_device_bridge.remote_mqtt import RemoteMqttClient
 
 
+def test_remote_mqtt_uses_websockets_when_provisioned(monkeypatch, tmp_path):
+    monkeypatch.setattr("paho.mqtt.client.Client.tls_set", lambda *_args, **_kwargs: None)
+    device_id = str(uuid.uuid4())
+    client = RemoteMqttClient(
+        device_id=device_id,
+        credentials={"username": device_id, "password": "secret", "host": "mqtt.test", "transport": "websockets"},
+        pairing_token="token",
+        health_url="http://127.0.0.1:8787/health",
+        ledger_path=tmp_path / "jobs.sqlite",
+    )
+
+    assert client.client.transport == "websockets"
+    client.ledger.close()
+
+
 @pytest.mark.asyncio
 async def test_print_command_is_not_repeated_after_duplicate_or_restart(monkeypatch, tmp_path):
     monkeypatch.setattr("paho.mqtt.client.Client.tls_set", lambda *_args, **_kwargs: None)

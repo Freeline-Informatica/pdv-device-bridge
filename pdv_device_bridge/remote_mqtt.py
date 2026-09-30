@@ -32,7 +32,8 @@ class RemoteMqttClient:
         self.ledger.execute("CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, status TEXT NOT NULL, message TEXT NOT NULL)")
         self.ledger.commit()
         self.client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-                                  client_id=device_id, protocol=mqtt.MQTTv5)
+                                  client_id=device_id, protocol=mqtt.MQTTv5,
+                                  transport=str(credentials.get("transport", "tcp")))
         self.client.username_pw_set(str(credentials["username"]), str(credentials["password"]))
         self.client.tls_set()
         self.client.will_set(self.topic("events/presence"), json.dumps({"online": False}), qos=1, retain=True)
