@@ -38,3 +38,10 @@ def test_parse_weight_empty_payload_returns_none() -> None:
 
 def test_parse_weight_invalid_bytes_returns_none() -> None:
     assert parse_weight_payload(b"\xff\xfe\x00") is None
+
+
+def test_parse_negative_net_weight_from_urano_frame() -> None:
+    parsed = parse_weight_payload(b"TARA: 0.528kg PESO L: -0.532kg R$/kg: 62.90")
+
+    assert parsed is not None
+    assert parsed.grams == -532

@@ -68,13 +68,15 @@ def read_direct(config: BridgeConfig, scale_id: str) -> dict[str, object]:
         max_read_bytes=config.scale.max_read_bytes,
     )
     if not payload:
+        if descriptor.no_response_state == "no_reading":
+            return {"grams": None, "state": "no_reading", "stable": None, "raw": "", "raw_hex": ""}
         raise RuntimeError("Sem resposta serial (0 bytes); isto nao comprova prato vazio.")
     parsed = parse_weight_payload(payload)
     if parsed is None:
         raise RuntimeError(f"Resposta serial invalida: hex={payload.hex()}")
     return {
         "grams": parsed.grams,
-        "state": "empty" if parsed.grams == 0 else "weight",
+        "state": "negative" if parsed.grams < 0 else ("empty" if parsed.grams == 0 else "weight"),
         "stable": parsed.stable,
         "raw": parsed.raw_text,
         "raw_hex": parsed.raw_hex,
@@ -113,7 +115,9 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 result = read_direct(config, scale_id) if args.direct else read_api(config, scale_id)
                 elapsed = (time.monotonic() - started) * 1000
-                print(f"{timestamp} OK {result.get('grams')} g state={result.get('state')} "
+                weight_label = f"{result['grams']} g" if result.get("grams") is not None else "sem peso transmitido"
+                status_label = "AGUARDO" if result.get("state") == "no_reading" else "LEITURA"
+                print(f"{timestamp} {status_label} {weight_label} state={result.get('state')} "
                       f"stable={result.get('stable')} duracao={elapsed:.0f} ms "
                       f"raw={result.get('raw', '')!r}" +
                       (f" hex={result['raw_hex']}" if 'raw_hex' in result else ""), flush=True)

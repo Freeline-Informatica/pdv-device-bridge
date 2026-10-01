@@ -282,6 +282,81 @@ async def test_serial_silence_blocks_cached_weight_until_valid_zero(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_urano_silence_clears_weight_without_claiming_zero_or_reopening(monkeypatch) -> None:
+    descriptor = SerialDeviceConfig(
+        device_id="scale-urano", path="/dev/ttyUSB0", no_response_state="no_reading",
+    )
+    worker = ScaleWorker(FakeRegistry(descriptor, "/dev/ttyUSB0"), ScaleRuntimeConfig())
+    responses = iter([b"PESO L: 0.208kg", b"", b"PESO L: 0.300kg"])
+    sessions = []
+
+    class FakeSession:
+        def __init__(self, descriptor, path):
+            self.descriptor = descriptor
+            self.path = path
+            sessions.append(self)
+
+        def read(self, **_kwargs):
+            return next(responses)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("pdv_device_bridge.scale_worker.ScaleSerialSession", FakeSession)
+
+    assert (await worker.read("scale-urano", max_age_ms=0))["grams"] == 208
+    waiting = await worker.read("scale-urano", max_age_ms=0)
+    assert waiting["state"] == "no_reading"
+    assert waiting["grams"] is None
+    assert waiting["kilograms"] is None
+    assert worker.health_snapshot()["scale-urano"]["last_error"] is None
+    assert worker.health_snapshot()["scale-urano"]["state"] == "no_reading"
+    assert (await worker.read("scale-urano", max_age_ms=0))["grams"] == 300
+    assert len(sessions) == 1
+
+
+@pytest.mark.asyncio
+async def test_urano_silence_does_not_clear_prior_serial_error(monkeypatch) -> None:
+    descriptor = SerialDeviceConfig(
+        device_id="scale-urano", path="/dev/ttyUSB0", no_response_state="no_reading",
+    )
+    worker = ScaleWorker(FakeRegistry(descriptor, "/dev/ttyUSB0"), ScaleRuntimeConfig())
+    responses = iter([serial.SerialException("EIO"), b"", b"PESO L: 0.000kg"])
+
+    def read_once(*_args, **_kwargs):
+        response = next(responses)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    monkeypatch.setattr("pdv_device_bridge.scale_worker.ScaleSerialSession.read", read_once)
+    monkeypatch.setattr("pdv_device_bridge.scale_worker.ScaleSerialSession.close", lambda *_args: None)
+
+    with pytest.raises(ScaleReadError, match="EIO"):
+        await worker.read("scale-urano", max_age_ms=0)
+    with pytest.raises(ScaleReadError, match="EIO"):
+        await worker.read("scale-urano", max_age_ms=0)
+    assert "EIO" in worker.health_snapshot()["scale-urano"]["last_error"]
+    assert (await worker.read("scale-urano", max_age_ms=0))["state"] == "empty"
+    assert worker.health_snapshot()["scale-urano"]["last_error"] is None
+
+
+@pytest.mark.asyncio
+async def test_valid_negative_frame_is_not_a_serial_error(monkeypatch) -> None:
+    descriptor = SerialDeviceConfig(device_id="scale-negative", path="/dev/ttyUSB0")
+    worker = ScaleWorker(FakeRegistry(descriptor, "/dev/ttyUSB0"), ScaleRuntimeConfig())
+    monkeypatch.setattr(
+        "pdv_device_bridge.scale_worker.ScaleSerialSession.read",
+        lambda *_args, **_kwargs: b"PESO L: -0.532kg",
+    )
+
+    result = await worker.read("scale-negative", max_age_ms=0)
+    assert result["state"] == "negative"
+    assert result["grams"] == -532
+    assert worker.health_snapshot()["scale-negative"]["last_error"] is None
+
+
+@pytest.mark.asyncio
 async def test_scale_worker_accepts_explicit_zero_and_rejects_invalid_bytes(monkeypatch) -> None:
     descriptor = SerialDeviceConfig(device_id="scale-zero", path="/dev/ttyUSB0")
     worker = ScaleWorker(FakeRegistry(descriptor, "/dev/ttyUSB0"), ScaleRuntimeConfig())

@@ -1,4 +1,5 @@
 from pdv_device_bridge.config import load_config
+from pdv_device_bridge.configuration_store import DeviceAssignment, apply_assignments
 
 
 def test_load_config_reads_serial_timing_fields(tmp_path) -> None:
@@ -59,3 +60,17 @@ baudrate = 115200
     assert config.printer.serial_chunk_delay_ms == 15
     assert config.printer.print_settle_ms == 1000
     assert config.printer.write_timeout_ms == 3000
+
+
+def test_urano_profile_persists_no_reading_policy(tmp_path) -> None:
+    config_path = tmp_path / "config.toml"
+    apply_assignments(config_path, [DeviceAssignment(
+        device_id="scale-horti-1",
+        kind="scale",
+        profile_id="scale-urano-pop-z-9600-8n2",
+        path="/dev/ttyUSB0",
+    )])
+
+    config = load_config(config_path)
+    assert config.scales[0].no_response_state == "no_reading"
+    assert config.scales[0].stopbits == 2

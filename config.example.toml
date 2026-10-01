@@ -32,6 +32,8 @@ baudrate = 9600
 bytesize = 8
 parity = "N"
 stopbits = 2
+# Para Urano POP-Z que nao responde quando o visor esta negativo/instavel:
+# no_response_state = "no_reading"
 # usb_vid = "0x067B"
 # usb_pid = "0x2303"
 # usb_serial = "A9B8C7"

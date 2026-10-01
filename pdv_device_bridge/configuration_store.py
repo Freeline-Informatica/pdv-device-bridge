@@ -59,6 +59,8 @@ def apply_assignments(config_path: str | Path, assignments: list[DeviceAssignmen
             f'parity = "{profile.parity}"',
             f"stopbits = {profile.stopbits:g}",
         ])
+        if assignment.kind == "scale" and profile.no_response_state != "error":
+            lines.append(f'no_response_state = "{profile.no_response_state}"')
         if assignment.usb_vid is not None:
             lines.append(f'usb_vid = "0x{assignment.usb_vid:04X}"')
         if assignment.usb_pid is not None:

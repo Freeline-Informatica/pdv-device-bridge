@@ -59,6 +59,7 @@ class SerialDeviceConfig:
     usb_vid: int | None = None
     usb_pid: int | None = None
     usb_serial: str | None = None
+    no_response_state: str = "error"
 
 
 @dataclass(slots=True, frozen=True)
@@ -166,6 +167,9 @@ def _parse_device(raw: dict, kind: str) -> SerialDeviceConfig:
 
     usb_vid = raw.get("usb_vid")
     usb_pid = raw.get("usb_pid")
+    no_response_state = str(raw.get("no_response_state", "error")).strip().lower()
+    if no_response_state not in {"error", "no_reading"} or (kind != "scale" and no_response_state != "error"):
+        raise ConfigError(f"no_response_state invalido para {device_id}: {no_response_state}")
 
     return SerialDeviceConfig(
         device_id=device_id,
@@ -177,6 +181,7 @@ def _parse_device(raw: dict, kind: str) -> SerialDeviceConfig:
         usb_vid=_parse_int_or_none(usb_vid),
         usb_pid=_parse_int_or_none(usb_pid),
         usb_serial=str(raw.get("usb_serial", "")).strip() or None,
+        no_response_state=no_response_state,
     )
 
 

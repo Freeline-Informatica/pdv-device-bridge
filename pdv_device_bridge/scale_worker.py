@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class CachedScaleReading:
-    grams: int
-    kilograms: float
+    grams: int | None
+    kilograms: float | None
     stable: bool | None
     raw: str
     read_at_epoch_ms: int
@@ -117,6 +117,25 @@ class ScaleWorker:
                 raise ScaleReadError(message) from exc
 
             if not payload_bytes:
+                if descriptor.no_response_state == "no_reading":
+                    previous_error = self._last_errors.get(scale_id)
+                    if previous_error:
+                        await asyncio.to_thread(session.close)
+                        self._sessions.pop(scale_id, None)
+                        raise ScaleReadError(previous_error)
+                    reading = CachedScaleReading(
+                        grams=None,
+                        kilograms=None,
+                        stable=None,
+                        raw="",
+                        read_at_epoch_ms=_now_epoch_ms(),
+                        state="no_reading",
+                    )
+                    self._cache[scale_id] = reading
+                    self._history.setdefault(scale_id, deque(maxlen=500)).appendleft(reading.to_payload())
+                    result = reading.to_payload()
+                    result["source"] = "device"
+                    return result
                 await asyncio.to_thread(session.close)
                 self._sessions.pop(scale_id, None)
                 message = "Balanca sem resposta serial; confira a conexao USB."
@@ -139,7 +158,7 @@ class ScaleWorker:
                 stable=parsed.stable,
                 raw=parsed.raw_text,
                 read_at_epoch_ms=_now_epoch_ms(),
-                state="empty" if parsed.grams == 0 else "weight",
+                state="negative" if parsed.grams < 0 else ("empty" if parsed.grams == 0 else "weight"),
             )
 
             self._cache[scale_id] = reading
@@ -212,6 +231,7 @@ class ScaleWorker:
                 "last_read_at": _epoch_ms_to_iso(reading.read_at_epoch_ms) if reading else None,
                 "grams": reading.grams if reading else None,
                 "stable": reading.stable if reading else None,
+                "state": reading.state if reading else None,
                 "serial_read_in_progress": bool(serial_read and not serial_read.done()),
                 "last_error": self._last_errors.get(scale_id),
             }

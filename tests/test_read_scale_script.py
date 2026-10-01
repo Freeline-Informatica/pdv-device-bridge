@@ -40,6 +40,22 @@ def test_direct_read_does_not_call_silence_empty(monkeypatch) -> None:
         read_scale.read_direct(config, "scale-horti-1")
 
 
+def test_direct_urano_silence_has_no_numeric_weight(monkeypatch) -> None:
+    config = BridgeConfig(scales=(SerialDeviceConfig(
+        device_id="scale-horti-1", path="/dev/ttyUSB0", no_response_state="no_reading",
+    ),))
+
+    async def fake_resolve_path(self, kind, device_id):
+        return "/dev/ttyUSB0"
+
+    monkeypatch.setattr(read_scale.DeviceRegistry, "resolve_path", fake_resolve_path)
+    monkeypatch.setattr(read_scale, "read_scale_once", lambda *_args, **_kwargs: b"")
+
+    reading = read_scale.read_direct(config, "scale-horti-1")
+    assert reading["state"] == "no_reading"
+    assert reading["grams"] is None
+
+
 def test_direct_mode_refuses_active_bridge(monkeypatch, tmp_path, capsys) -> None:
     config = BridgeConfig(scales=(SerialDeviceConfig(device_id="scale-horti-1"),))
     monkeypatch.setattr(read_scale, "load_config", lambda _path: config)
@@ -60,5 +76,5 @@ def test_single_api_read_prints_valid_zero(monkeypatch, tmp_path, capsys) -> Non
     assert read_scale.main(["--config", str(tmp_path / "config.toml")]) == 0
 
     output = capsys.readouterr().out
-    assert "OK 0 g state=empty" in output
+    assert "LEITURA 0 g state=empty" in output
     assert "raw='PESO L: 0.000kg'" in output

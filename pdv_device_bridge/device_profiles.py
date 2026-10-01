@@ -12,6 +12,7 @@ class DeviceProfile:
     bytesize: int = 8
     parity: str = "N"
     stopbits: float = 1.0
+    no_response_state: str = "error"
 
     def to_payload(self) -> dict[str, object]:
         return asdict(self)
@@ -19,6 +20,7 @@ class DeviceProfile:
 
 PROFILES: tuple[DeviceProfile, ...] = (
     DeviceProfile("scale-generic-9600-8n2", "scale", "Balança serial 9600 8N2", 9600, stopbits=2.0),
+    DeviceProfile("scale-urano-pop-z-9600-8n2", "scale", "Urano POP-Z 9600 8N2 (silêncio sem peso)", 9600, stopbits=2.0, no_response_state="no_reading"),
     DeviceProfile("scale-generic-9600-8n1", "scale", "Balança serial 9600 8N1", 9600),
     DeviceProfile("printer-escpos-115200-8n1", "printer", "Impressora ESC/POS 115200 8N1", 115200),
     DeviceProfile("printer-escpos-9600-8n1", "printer", "Impressora ESC/POS 9600 8N1", 9600),

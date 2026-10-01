@@ -136,10 +136,13 @@ def read_bridge(port: int, scale_id: str, *, attempts: int = 3) -> bool:
             failures.append(f"{exc} em {(time.monotonic() - started_at) * 1000:.0f} ms")
         else:
             if failures:
-                print(f"[AVISO] {len(failures)} tentativa(s) falharam antes desta leitura valida: {'; '.join(failures)}")
-            print(f"[OK] Leitura do dispositivo: {payload.get('grams')} g; "
-                  f"estado={payload.get('state')}; origem={payload.get('source')}; "
-                  f"stable={payload.get('stable')}; HTTP={(time.monotonic() - started_at) * 1000:.0f} ms")
+                print(f"[AVISO] {len(failures)} tentativa(s) falharam antes desta resposta: {'; '.join(failures)}")
+            if payload.get("state") == "no_reading":
+                print(f"[AGUARDO] Balanca nao transmitiu peso; estado=no_reading; HTTP={(time.monotonic() - started_at) * 1000:.0f} ms")
+            else:
+                print(f"[OK] Leitura do dispositivo: {payload.get('grams')} g; "
+                      f"estado={payload.get('state')}; origem={payload.get('source')}; "
+                      f"stable={payload.get('stable')}; HTTP={(time.monotonic() - started_at) * 1000:.0f} ms")
             print(f"Resposta bruta: {str(payload.get('raw', ''))[:200]!r}")
             print("Nota: stable=True pode ser padrao do parser quando o protocolo nao informa estabilidade.")
             return True

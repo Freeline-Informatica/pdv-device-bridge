@@ -66,6 +66,18 @@ def test_read_bridge_fails_when_every_sample_fails(monkeypatch, capsys) -> None:
     assert "Nenhuma das 3 tentativas" in capsys.readouterr().out
 
 
+def test_read_bridge_reports_no_reading_without_fake_zero(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        "scripts.troubleshoot_scale.urlopen",
+        lambda *_args, **_kwargs: BytesIO(b'{"state":"no_reading","grams":null,"raw":""}'),
+    )
+
+    assert read_bridge(8787, "scale-horti-1") is True
+    output = capsys.readouterr().out
+    assert "[AGUARDO]" in output
+    assert "None g" not in output
+
+
 def test_kernel_events_use_test_start_instead_of_old_history(monkeypatch, capsys) -> None:
     commands = []
 
