@@ -57,9 +57,20 @@ pdv-device-bridge --config ./config.example.toml
 - `GET /health`
 - `GET /v1/devices`
 - `GET /v1/scales/{scale_id}/read?max_age_ms=1500`
+- `GET /v1/scales/{scale_id}/readings?limit=50` (leituras recentes em memória)
 - `GET /v1/scales/{scale_id}/events` (SSE; evento `scale` com `state=weight|empty|error`)
 - `POST /v1/printers/{printer_id}/jobs`
 - `GET /v1/printers/{printer_id}/jobs/{job_id}`
+- `GET /v1/printers/{printer_id}/jobs?limit=50` (fila e jobs recentes)
+- `POST /v1/printers/{printer_id}/jobs/{job_id}/retry` (reenvia um job com falha)
+
+O histórico de pesagens mantém até 500 leituras por balança e o de impressões,
+até 500 jobs por impressora enquanto o processo do bridge estiver ativo. Ambos
+são voláteis e são limpos ao reiniciar o serviço. `/health` e `/v1/status`
+informam a versão instalada. Um reenvio cria um novo `job_id`,
+aponta para o job original em `retry_of` e pode imprimir duplicado se a falha
+original ocorreu depois de os dados chegarem à impressora. Jobs em andamento ou
+já impressos não podem ser reenviados por essa operação.
 
 ## Diagnostico da balanca no Raspberry Pi
 
@@ -130,8 +141,8 @@ pytest
 
 ## Políticas operacionais implementadas
 
-- Leitura da balança: timeout serial `800ms` e limite da operação `2500ms`, comando `0x04 0x05`, até `200` bytes; encerra em `CR/LF` ou após `30ms` sem novos bytes. Uma resposta sem bytes ou peso zero retorna `state=empty`, `grams=0` e HTTP `200`; payload não reconhecido e falhas seriais retornam HTTP `502` e degradam `/health`. Um payload inválido é registrado em hexadecimal no log para diagnóstico do protocolo.
-- O stream SSE faz leituras novas enquanto houver assinantes, com uma única rotina por balança. Para avaliar a meta de 500 ms, use `scripts/troubleshoot_scale.py --read-api` para ver a duração HTTP e filme a colocação do item junto com a tela do PDV. Ajuste `scale.read_timeout_ms` no Raspberry somente após medir as respostas reais; o padrão de 800 ms pode impedir essa meta quando o prato vazio não responde.
+- Leitura da balança: timeout serial `800ms` e limite da operação `2500ms`, comando `0x04 0x05`, até `200` bytes; encerra em `CR/LF` ou após `30ms` sem novos bytes. Apenas um quadro serial válido com peso zero retorna `state=empty`, `grams=0` e HTTP `200`. Ausência de bytes, payload não reconhecido e falhas seriais retornam HTTP `502` e degradam `/health`. Um payload inválido é registrado em hexadecimal no log para diagnóstico do protocolo. Uma leitura válida posterior recupera a saúde.
+- O stream SSE faz leituras novas enquanto houver assinantes, com uma única rotina por balança. Para avaliar a meta de 500 ms, use `scripts/troubleshoot_scale.py --read-api` para ver a duração HTTP e filme a colocação do item junto com a tela do PDV. Ajuste `scale.read_timeout_ms` no Raspberry somente após medir as respostas reais; o padrão de 800 ms pode impedir essa meta quando a balança não responde.
 - A porta da balança permanece aberta entre consultas e é reaberta se o caminho USB mudar ou uma operação serial falhar. Assim o adaptador não precisa ser aberto a cada atualização da tela.
 - Cache da última leitura, inclusive peso zero: `1500ms` (ajustável por `max_age_ms`; as telas ao vivo pedem leitura nova).
 - Fila por impressora: tamanho máximo `100`.

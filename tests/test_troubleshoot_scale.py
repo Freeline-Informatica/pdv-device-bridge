@@ -18,6 +18,11 @@ usb 1-1.2: USB disconnect, device number 4"""
     assert any("desconexao USB" in finding for finding in findings)
 
 
+def test_kernel_findings_identifies_comm_status_failure() -> None:
+    findings = kernel_findings("cp210x ttyUSB0: failed to get comm status: -121")
+    assert any("CP210x" in finding and "-121" in finding for finding in findings)
+
+
 def test_probe_opens_pty_without_sending_data(capsys) -> None:
     master, slave = pty.openpty()
     try:

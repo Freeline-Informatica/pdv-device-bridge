@@ -1,5 +1,7 @@
 import serial
 import pytest
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from pdv_device_bridge.config import SerialDeviceConfig
 from pdv_device_bridge.serial_io import ScaleSerialSession, read_scale_once, send_printer_payload
@@ -88,7 +90,7 @@ def test_read_scale_once_stops_at_response_terminator(monkeypatch) -> None:
 
     assert payload == b"ST,+0.245kg\r"
     assert fake.writes == [b"\x04\x05"]
-    assert fake.flush_count == 1
+    assert fake.flush_count == 0
     assert fake.closed
 
 
@@ -108,6 +110,23 @@ def test_read_scale_once_accepts_unterminated_payload_after_quiet_period(monkeyp
 
     assert payload == b"+0.485kg"
     assert fake.timeout <= 0.03
+
+
+def test_read_scale_once_rejects_partial_command_write(monkeypatch) -> None:
+    fake = FakeSerial(write_lengths=[1])
+    monkeypatch.setattr("pdv_device_bridge.serial_io.serial.Serial", lambda **_kwargs: fake)
+
+    with pytest.raises(serial.SerialTimeoutException, match="parcialmente"):
+        read_scale_once(
+            SerialDeviceConfig(device_id="scale-1"),
+            path="/dev/ttyUSB0",
+            command_bytes=b"\x04\x05",
+            timeout_ms=800,
+            response_quiet_ms=30,
+            max_read_bytes=200,
+        )
+
+    assert fake.closed
 
 
 def test_read_scale_once_keeps_total_timeout_for_missing_response(monkeypatch) -> None:
@@ -150,7 +169,44 @@ def test_scale_session_reuses_port_and_closes_it(monkeypatch) -> None:
     assert first == b"+0.245kg\r"
     assert second == b"+0.485kg\r"
     assert len(opens) == 1
+    assert opens[0]["write_timeout"] == 0.8
     assert fake.writes == [b"\x04\x05", b"\x04\x05"]
+    assert fake.closed
+
+
+def test_scale_session_aborts_blocked_read_and_retires_port(monkeypatch) -> None:
+    started = threading.Event()
+    released = threading.Event()
+
+    class BlockingSerial(FakeSerial):
+        def read(self, _size: int) -> bytes:
+            started.set()
+            released.wait(timeout=2)
+            return b""
+
+        def cancel_read(self) -> None:
+            released.set()
+
+        def cancel_write(self) -> None:
+            pass
+
+    fake = BlockingSerial()
+    monkeypatch.setattr("pdv_device_bridge.serial_io.serial.Serial", lambda **_kwargs: fake)
+    session = ScaleSerialSession(SerialDeviceConfig(device_id="scale-1"), "/dev/ttyUSB0")
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            session.read,
+            command_bytes=b"\x04\x05",
+            timeout_ms=800,
+            response_quiet_ms=30,
+            max_read_bytes=200,
+        )
+        assert started.wait(timeout=1)
+        session.abort()
+        with pytest.raises(serial.SerialException, match="cancelada"):
+            future.result(timeout=1)
+
     assert fake.closed
 
 

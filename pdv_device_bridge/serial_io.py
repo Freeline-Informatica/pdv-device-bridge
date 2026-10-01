@@ -71,23 +71,45 @@ class ScaleSerialSession:
         self.descriptor = descriptor
         self.path = path
         self._port = None
+        self._aborted = False
 
     def read(self, *, command_bytes: bytes, timeout_ms: int, response_quiet_ms: int, max_read_bytes: int) -> bytes:
         if self._port is None or not self._port.is_open:
-            self._port = _create_serial_port(self.descriptor, self.path, timeout_ms=timeout_ms)
+            self._port = _create_serial_port(
+                self.descriptor, self.path, timeout_ms=timeout_ms, write_timeout_ms=timeout_ms,
+            )
 
         try:
+            if self._aborted:
+                raise serial.SerialException("Leitura serial cancelada apos timeout.")
             self._port.timeout = max(0.01, timeout_ms / 1000)
-            return _read_scale_payload(
+            payload = _read_scale_payload(
                 self._port,
                 command_bytes=command_bytes,
                 timeout_ms=timeout_ms,
                 response_quiet_ms=response_quiet_ms,
                 max_read_bytes=max_read_bytes,
             )
+            if self._aborted:
+                raise serial.SerialException("Leitura serial cancelada apos timeout.")
+            return payload
         except (OSError, serial.SerialException):
             self.close()
             raise
+
+    def abort(self) -> None:
+        """Interrompe uma leitura/escrita pendente sem fechar a porta em outra thread."""
+        self._aborted = True
+        port = self._port
+        if port is None or not port.is_open:
+            return
+        for method_name in ("cancel_read", "cancel_write"):
+            method = getattr(port, method_name, None)
+            if callable(method):
+                try:
+                    method()
+                except (OSError, serial.SerialException):
+                    pass
 
     def close(self) -> None:
         port = self._port
@@ -105,7 +127,7 @@ def read_scale_once(
     response_quiet_ms: int,
     max_read_bytes: int,
 ) -> bytes:
-    with open_serial_port(descriptor, path, timeout_ms=timeout_ms) as serial_port:
+    with open_serial_port(descriptor, path, timeout_ms=timeout_ms, write_timeout_ms=timeout_ms) as serial_port:
         return _read_scale_payload(
             serial_port,
             command_bytes=command_bytes,
@@ -124,8 +146,9 @@ def _read_scale_payload(
     max_read_bytes: int,
 ) -> bytes:
     serial_port.reset_input_buffer()
-    serial_port.write(command_bytes)
-    serial_port.flush()
+    written = serial_port.write(command_bytes)
+    if written != len(command_bytes):
+        raise serial.SerialTimeoutException("Comando da balanca enviado parcialmente.")
 
     max_bytes = max(1, int(max_read_bytes))
     deadline = time.monotonic() + (max(10, int(timeout_ms)) / 1000)

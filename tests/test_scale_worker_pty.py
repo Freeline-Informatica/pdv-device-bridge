@@ -8,6 +8,7 @@ import serial
 
 from pdv_device_bridge.config import ScaleRuntimeConfig, SerialDeviceConfig
 from pdv_device_bridge.scale_worker import ScaleReadError, ScaleWorker
+from pdv_device_bridge.serial_io import ScaleSerialSession
 
 
 class FakeRegistry:
@@ -86,7 +87,7 @@ async def test_scale_worker_reads_from_virtual_tty_and_uses_cache() -> None:
 
 
 @pytest.mark.asyncio
-async def test_virtual_tty_recovers_from_silent_empty_plate_to_weight() -> None:
+async def test_virtual_tty_recovers_from_missing_response_to_weight() -> None:
     master_fd, slave_fd = os.openpty()
     slave_path = os.ttyname(slave_fd)
     descriptor = SerialDeviceConfig(device_id="scale-silent", path=slave_path)
@@ -106,10 +107,9 @@ async def test_virtual_tty_recovers_from_silent_empty_plate_to_weight() -> None:
     emulator_thread = threading.Thread(target=device_emulator, daemon=True)
     emulator_thread.start()
     try:
-        empty = await worker.read("scale-silent", max_age_ms=0)
+        with pytest.raises(ScaleReadError, match="sem resposta serial"):
+            await worker.read("scale-silent", max_age_ms=0)
         weight = await worker.read("scale-silent", max_age_ms=0)
-        assert empty["state"] == "empty"
-        assert empty["grams"] == 0
         assert weight["state"] == "weight"
         assert weight["grams"] == 485
     finally:
@@ -217,15 +217,15 @@ async def test_silence_does_not_clear_a_serial_failure(monkeypatch) -> None:
 
     with pytest.raises(ScaleReadError, match="EPIPE"):
         await worker.read("scale-fault", max_age_ms=0)
-    empty = await worker.read("scale-fault", max_age_ms=0)
-    assert empty["state"] == "empty"
-    assert "EPIPE" in worker.health_snapshot()["scale-fault"]["last_error"]
+    with pytest.raises(ScaleReadError, match="sem resposta serial"):
+        await worker.read("scale-fault", max_age_ms=0)
+    assert "sem resposta serial" in worker.health_snapshot()["scale-fault"]["last_error"]
     await worker.read("scale-fault", max_age_ms=0)
     assert worker.health_snapshot()["scale-fault"]["last_error"] is None
 
 
 @pytest.mark.asyncio
-async def test_scale_worker_treats_no_bytes_as_empty_without_reopening_port(monkeypatch) -> None:
+async def test_scale_worker_rejects_no_bytes_and_reopens_port(monkeypatch) -> None:
     descriptor = SerialDeviceConfig(device_id="scale-empty", path="/dev/ttyUSB0")
     worker = ScaleWorker(FakeRegistry(descriptor, "/dev/ttyUSB0"), ScaleRuntimeConfig())
     sessions = []
@@ -237,29 +237,48 @@ async def test_scale_worker_treats_no_bytes_as_empty_without_reopening_port(monk
             self.closed = False
             sessions.append(self)
 
-        reads = 0
-
         def read(self, **_kwargs):
-            self.reads += 1
-            return b"" if self.reads == 1 else b"ST,+0.458kg\r"
+            return b"" if len(sessions) == 1 else b"ST,+0.458kg\r"
 
         def close(self):
             self.closed = True
 
     monkeypatch.setattr("pdv_device_bridge.scale_worker.ScaleSerialSession", FakeSession)
 
-    empty = await worker.read("scale-empty", max_age_ms=0)
-    assert empty["state"] == "empty"
-    assert empty["grams"] == 0
-    assert empty["stable"] is None
-    assert worker.health_snapshot()["scale-empty"]["last_error"] is None
+    with pytest.raises(ScaleReadError, match="sem resposta serial"):
+        await worker.read("scale-empty", max_age_ms=0)
+    assert "sem resposta serial" in worker.health_snapshot()["scale-empty"]["last_error"]
     result = await worker.read("scale-empty", max_age_ms=0)
 
     assert result["grams"] == 458
-    assert len(sessions) == 1
-    assert not sessions[0].closed
-    await worker.stop()
+    assert len(sessions) == 2
     assert sessions[0].closed
+    assert not sessions[1].closed
+    await worker.stop()
+    assert sessions[1].closed
+
+
+@pytest.mark.asyncio
+async def test_serial_silence_blocks_cached_weight_until_valid_zero(monkeypatch) -> None:
+    descriptor = SerialDeviceConfig(device_id="scale-silence", path="/dev/ttyUSB0")
+    worker = ScaleWorker(FakeRegistry(descriptor, "/dev/ttyUSB0"), ScaleRuntimeConfig())
+    responses = iter([b"ST,+0.438kg\r", b"", b"ST,+0.000kg\r"])
+    monkeypatch.setattr(
+        "pdv_device_bridge.scale_worker.ScaleSerialSession.read",
+        lambda *_args, **_kwargs: next(responses),
+    )
+    monkeypatch.setattr("pdv_device_bridge.scale_worker.ScaleSerialSession.close", lambda *_args: None)
+
+    weight = await worker.read("scale-silence", max_age_ms=0)
+    assert weight["grams"] == 438
+    with pytest.raises(ScaleReadError, match="sem resposta serial"):
+        await worker.read("scale-silence", max_age_ms=0)
+
+    zero = await worker.read("scale-silence", max_age_ms=1500)
+    assert zero["state"] == "empty"
+    assert zero["grams"] == 0
+    assert zero["source"] == "device"
+    assert worker.health_snapshot()["scale-silence"]["last_error"] is None
 
 
 @pytest.mark.asyncio
@@ -339,6 +358,7 @@ async def test_scale_worker_times_out_stuck_serial_read_without_starting_another
             await worker.read("scale-stuck", max_age_ms=0)
         assert calls == 1
         assert worker.health_snapshot()["scale-stuck"]["serial_read_in_progress"] is True
+        assert "scale-stuck" not in worker._sessions
     finally:
         release.set()
 
@@ -346,3 +366,20 @@ async def test_scale_worker_times_out_stuck_serial_read_without_starting_another
     result = await worker.read("scale-stuck", max_age_ms=0)
     assert result["grams"] == 245
     assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_stop_aborts_an_active_serial_read() -> None:
+    descriptor = SerialDeviceConfig(device_id="scale-stop", path="/dev/ttyUSB0")
+    worker = ScaleWorker(FakeRegistry(descriptor, "/dev/ttyUSB0"), ScaleRuntimeConfig())
+    session = ScaleSerialSession(descriptor, "/dev/ttyUSB0")
+    active_read = asyncio.create_task(asyncio.sleep(10))
+    worker._sessions["scale-stop"] = session
+    worker._serial_reads["scale-stop"] = active_read
+
+    await worker.stop()
+
+    assert session._aborted
+    assert not worker._sessions
+    active_read.cancel()
+    await asyncio.gather(active_read, return_exceptions=True)

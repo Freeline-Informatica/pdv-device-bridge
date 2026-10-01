@@ -33,6 +33,7 @@ class PrinterJob:
     attempts: int
     created_at_epoch_ms: int
     updated_at_epoch_ms: int
+    retry_of: str | None = None
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -44,6 +45,7 @@ class PrinterJob:
             "attempts": self.attempts,
             "created_at": _epoch_ms_to_iso(self.created_at_epoch_ms),
             "updated_at": _epoch_ms_to_iso(self.updated_at_epoch_ms),
+            "retry_of": self.retry_of,
         }
 
 
@@ -60,6 +62,8 @@ class PrinterWorker:
         self._printer_ids = printer_ids
         self._queues = {printer_id: asyncio.Queue[_QueuedPrinterJob](maxsize=config.queue_size) for printer_id in printer_ids}
         self._jobs: dict[tuple[str, str], PrinterJob] = {}
+        self._payloads: dict[tuple[str, str], bytes] = {}
+        self._active_jobs: dict[str, str] = {}
         self._workers: dict[str, asyncio.Task[None]] = {}
         self._locks = {printer_id: asyncio.Lock() for printer_id in printer_ids}
 
@@ -99,6 +103,7 @@ class PrinterWorker:
             updated_at_epoch_ms=now_ms,
         )
         self._jobs[(printer_id, job_id)] = job
+        self._payloads[(printer_id, job_id)] = payload
 
         try:
             queue.put_nowait(_QueuedPrinterJob(job_id=job_id, payload=payload))
@@ -111,6 +116,7 @@ class PrinterWorker:
             )
             raise QueueLimitReachedError("Fila de impressao cheia.") from exc
 
+        self._prune_history(printer_id)
         return job.to_payload()
 
     def get_job(self, printer_id: str, job_id: str) -> dict[str, object]:
@@ -119,26 +125,54 @@ class PrinterWorker:
             raise JobNotFoundError(f"Job '{job_id}' nao encontrado para a impressora '{printer_id}'.")
         return job.to_payload()
 
+    def list_jobs(self, printer_id: str, *, limit: int = 50) -> list[dict[str, object]]:
+        if printer_id not in self._queues:
+            raise PrinterWorkerError(f"Impressora '{printer_id}' nao configurada.")
+        jobs = [job for (owner, _), job in self._jobs.items() if owner == printer_id]
+        jobs.sort(key=lambda job: job.created_at_epoch_ms, reverse=True)
+        return [job.to_payload() for job in jobs[:max(1, min(int(limit), 500))]]
+
+    def retry_job(self, printer_id: str, job_id: str) -> dict[str, object]:
+        original = self._jobs.get((printer_id, job_id))
+        if original is None:
+            raise JobNotFoundError(f"Job '{job_id}' nao encontrado para a impressora '{printer_id}'.")
+        if original.status != "failed":
+            raise PrinterWorkerError("Somente jobs com falha podem ser reenviados.")
+        payload = self._payloads.get((printer_id, job_id))
+        if payload is None:
+            raise PrinterWorkerError("Payload original indisponivel para reenvio.")
+        created = self.submit_job(printer_id, payload, request_id=original.request_id)
+        retry_job = self._jobs[(printer_id, str(created["job_id"]))]
+        retry_job.retry_of = job_id
+        retry_job.message = f"Reenvio do job {job_id} enfileirado. Pode gerar impressao duplicada se o envio anterior chegou ao equipamento."
+        return retry_job.to_payload()
+
     def health_snapshot(self) -> dict[str, dict[str, object]]:
         snapshot: dict[str, dict[str, object]] = {}
         for printer_id, queue in self._queues.items():
             snapshot[printer_id] = {
                 "queue_size": queue.qsize(),
                 "queue_limit": queue.maxsize,
+                "active_job_id": self._active_jobs.get(printer_id),
                 "running": printer_id in self._workers and not self._workers[printer_id].done(),
             }
 
         return snapshot
+
+    def is_idle(self) -> bool:
+        return not self._active_jobs and all(queue.empty() for queue in self._queues.values())
 
     async def _run_worker(self, printer_id: str) -> None:
         queue = self._queues[printer_id]
 
         while True:
             item = await queue.get()
+            self._active_jobs[printer_id] = item.job_id
 
             try:
                 await self._process_job(printer_id, item)
             finally:
+                self._active_jobs.pop(printer_id, None)
                 queue.task_done()
 
     async def _process_job(self, printer_id: str, queued_job: _QueuedPrinterJob) -> None:
@@ -218,6 +252,21 @@ class PrinterWorker:
         if attempts is not None:
             job.attempts = attempts
         job.updated_at_epoch_ms = _now_epoch_ms()
+        self._prune_history(printer_id)
+
+    def _prune_history(self, printer_id: str) -> None:
+        jobs = [job for (owner, _), job in self._jobs.items() if owner == printer_id]
+        excess = len(jobs) - 500
+        if excess <= 0:
+            return
+        removable = sorted(
+            (job for job in jobs if job.status in {"printed", "failed"}),
+            key=lambda job: job.created_at_epoch_ms,
+        )
+        for job in removable[:excess]:
+            key = (printer_id, job.job_id)
+            self._jobs.pop(key, None)
+            self._payloads.pop(key, None)
 
 
 def _now_epoch_ms() -> int:

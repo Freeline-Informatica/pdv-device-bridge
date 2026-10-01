@@ -7,14 +7,12 @@ from datetime import datetime, timezone
 import hmac
 import json
 
-from typing import Annotated
-
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
+from . import __version__
 from .app_runtime import BridgeRuntime
 from .device_registry import DeviceNotFoundError, DeviceUnavailableError
 from .configuration_store import DeviceAssignment, apply_assignments
@@ -50,14 +48,15 @@ class ConfigurationApplyRequest(BaseModel):
 
 
 def create_app(runtime: BridgeRuntime) -> FastAPI:
-    bearer = HTTPBearer(auto_error=False)
-
     def require_lan_access(
-        credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+        request: Request,
     ) -> None:
         if not runtime.config.security.require_auth:
             return
-        supplied = credentials.credentials if credentials and credentials.scheme.lower() == "bearer" else ""
+        authorization = request.headers.get("Authorization", "")
+        scheme, separator, supplied = authorization.partition(" ")
+        if not separator or scheme.lower() != "bearer":
+            supplied = ""
         expected = runtime.config.security.pairing_token or ""
         if not supplied or not hmac.compare_digest(supplied, expected):
             raise HTTPException(status_code=401, detail="Credencial LAN invalida.")
@@ -72,7 +71,7 @@ def create_app(runtime: BridgeRuntime) -> FastAPI:
 
     app = FastAPI(
         title="pdv-device-bridge",
-        version="0.2.0",
+        version=__version__,
         lifespan=lifespan,
     )
     app.add_middleware(
@@ -94,6 +93,7 @@ def create_app(runtime: BridgeRuntime) -> FastAPI:
 
         return {
             "status": "degraded" if degraded else "ok",
+            "version": app.version,
             "timestamp": _utc_now_iso(),
             "uptime_seconds": round(runtime.uptime_seconds(), 3),
             "idle": runtime.is_idle(),
@@ -113,6 +113,7 @@ def create_app(runtime: BridgeRuntime) -> FastAPI:
     @app.get("/v1/status", dependencies=[Depends(require_lan_access)])
     async def status() -> dict[str, object]:
         return {
+            "version": app.version,
             "identity": runtime.identity.public_payload(version=app.version) if runtime.identity else None,
             "idle": runtime.is_idle(),
             "devices": runtime.registry.snapshot(),
@@ -156,6 +157,18 @@ def create_app(runtime: BridgeRuntime) -> FastAPI:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ScaleReadError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    @app.get("/v1/scales/{scale_id}/readings", dependencies=[Depends(require_lan_access)])
+    async def list_scale_readings(
+        scale_id: str,
+        limit: int = Query(default=50, ge=1, le=500),
+    ) -> dict[str, object]:
+        try:
+            runtime.registry.get_descriptor("scale", scale_id)
+        except DeviceNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        items = runtime.scale_worker.recent_readings(scale_id, limit=limit)
+        return {"items": items, "count": len(items)}
 
     @app.get("/v1/scales/{scale_id}/events", dependencies=[Depends(require_lan_access)])
     async def stream_scale(scale_id: str) -> StreamingResponse:
@@ -214,6 +227,33 @@ def create_app(runtime: BridgeRuntime) -> FastAPI:
             return runtime.printer_worker.get_job(printer_id, job_id)
         except JobNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/v1/printers/{printer_id}/jobs", dependencies=[Depends(require_lan_access)])
+    async def list_print_jobs(
+        printer_id: str,
+        limit: int = Query(default=50, ge=1, le=500),
+    ) -> dict[str, object]:
+        try:
+            items = runtime.printer_worker.list_jobs(printer_id, limit=limit)
+        except PrinterWorkerError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"items": items, "count": len(items), "queue": runtime.printer_worker.health_snapshot().get(printer_id)}
+
+    @app.post("/v1/printers/{printer_id}/jobs/{job_id}/retry", dependencies=[Depends(require_lan_access)])
+    async def retry_print_job(printer_id: str, job_id: str) -> PrintJobCreateResponse:
+        try:
+            created = runtime.printer_worker.retry_job(printer_id, job_id)
+        except JobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except QueueLimitReachedError as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        except PrinterWorkerError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return PrintJobCreateResponse(
+            job_id=str(created["job_id"]),
+            status=str(created["status"]),
+            message=str(created["message"]),
+        )
 
     return app
 
