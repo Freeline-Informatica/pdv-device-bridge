@@ -30,11 +30,11 @@ def kernel_findings(log: str) -> list[str]:
     findings: list[str] = []
     lowered = log.lower()
     if "cp210x_open - unable to enable uart" in lowered or (
-        "cp210x" in lowered and "failed set request" in lowered and "status: -32" in lowered
+        "cp210x" in lowered and ("-32" in lowered or "-121" in lowered)
     ):
         findings.append(
-            "CP210x falhou ao habilitar a UART (-32/EPIPE): falha na comunicacao USB; "
-            "teste reconectar, outra porta USB e outro adaptador."
+            "CP210x registrou falha de comunicacao USB (-32/EPIPE ou -121); "
+            "confira cabo, porta USB, hub e adaptador antes de alterar a configuracao serial."
         )
     if "usb disconnect" in lowered:
         findings.append("O kernel registrou desconexao USB; confira a hora do evento e a conexao fisica.")
@@ -195,7 +195,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.read_api and not read_bridge(config.server.port, descriptor.device_id):
         result = 1
 
-    show_kernel_events(path, since=test_started_at)
+    show_kernel_events(path)
+    if test_started_at:
+        show_kernel_events(path, since=test_started_at)
 
     if not args.open_port and not args.read_api:
         print("Para testar abertura: pare o servico e execute com --open-port.")

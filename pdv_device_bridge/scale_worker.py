@@ -58,7 +58,7 @@ class ScaleWorker:
 
         cached = self._cache.get(scale_id)
         now_ms = _now_epoch_ms()
-        if effective_max_age_ms > 0 and cached and (now_ms - cached.read_at_epoch_ms) <= effective_max_age_ms:
+        if effective_max_age_ms > 0 and cached and not self._last_errors.get(scale_id) and (now_ms - cached.read_at_epoch_ms) <= effective_max_age_ms:
             payload = cached.to_payload()
             payload["source"] = "cache"
             return payload
@@ -68,7 +68,7 @@ class ScaleWorker:
             # Evita corrida entre leitores simultaneos do mesmo dispositivo.
             cached = self._cache.get(scale_id)
             now_ms = _now_epoch_ms()
-            if effective_max_age_ms > 0 and cached and (now_ms - cached.read_at_epoch_ms) <= effective_max_age_ms:
+            if effective_max_age_ms > 0 and cached and not self._last_errors.get(scale_id) and (now_ms - cached.read_at_epoch_ms) <= effective_max_age_ms:
                 payload = cached.to_payload()
                 payload["source"] = "cache"
                 return payload
@@ -107,6 +107,8 @@ class ScaleWorker:
                 message = "Tempo limite da leitura serial da balanca excedido."
                 self._last_errors[scale_id] = message
                 logger.warning("scale read timed out: scale_id=%s path=%s", scale_id, path)
+                self._sessions.pop(scale_id, None)
+                session.abort()
                 raise ScaleReadError(message) from exc
             except Exception as exc:
                 message = f"Falha na leitura serial da balanca: {exc}"
@@ -114,8 +116,16 @@ class ScaleWorker:
                 logger.exception("scale read failed: scale_id=%s path=%s", scale_id, path)
                 raise ScaleReadError(message) from exc
 
-            parsed = parse_weight_payload(payload_bytes) if payload_bytes else None
-            if payload_bytes and parsed is None:
+            if not payload_bytes:
+                await asyncio.to_thread(session.close)
+                self._sessions.pop(scale_id, None)
+                message = "Balanca sem resposta serial; confira a conexao USB."
+                self._last_errors[scale_id] = message
+                logger.warning("scale did not respond: scale_id=%s path=%s", scale_id, path)
+                raise ScaleReadError(message)
+
+            parsed = parse_weight_payload(payload_bytes)
+            if parsed is None:
                 await asyncio.to_thread(session.close)
                 self._sessions.pop(scale_id, None)
                 logger.warning("invalid scale payload: scale_id=%s raw_hex=%s", scale_id, payload_bytes.hex())
@@ -124,21 +134,18 @@ class ScaleWorker:
                 raise ScaleReadError(message)
 
             reading = CachedScaleReading(
-                grams=parsed.grams if parsed else 0,
-                kilograms=parsed.kilograms if parsed else 0.0,
-                stable=parsed.stable if parsed else None,
-                raw=parsed.raw_text if parsed else "",
+                grams=parsed.grams,
+                kilograms=parsed.kilograms,
+                stable=parsed.stable,
+                raw=parsed.raw_text,
                 read_at_epoch_ms=_now_epoch_ms(),
-                state="empty" if parsed is None or parsed.grams == 0 else "weight",
+                state="empty" if parsed.grams == 0 else "weight",
             )
 
             self._cache[scale_id] = reading
             history = self._history.setdefault(scale_id, deque(maxlen=500))
             history.appendleft(reading.to_payload())
-            # Silence alone cannot prove that a failed serial link recovered.
-            # Only a parsed frame confirms that communication is healthy again.
-            if parsed is not None:
-                self._last_errors.pop(scale_id, None)
+            self._last_errors.pop(scale_id, None)
             result = reading.to_payload()
             result["source"] = "device"
             return result
@@ -191,6 +198,7 @@ class ScaleWorker:
         for scale_id, session in list(self._sessions.items()):
             active_read = self._serial_reads.get(scale_id)
             if active_read and not active_read.done():
+                session.abort()
                 continue
             await asyncio.to_thread(session.close)
         self._sessions.clear()
