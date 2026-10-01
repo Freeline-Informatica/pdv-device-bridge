@@ -141,6 +141,27 @@ pytest
 
 ## Políticas operacionais implementadas
 
+### Leitura da balança pelo terminal
+
+Com o bridge ativo, leia pela API local para não disputar a porta serial. Cada amostra pede uma leitura nova (`max_age_ms=0`) e mostra hora, duração, estado e resposta bruta:
+
+```bash
+./.venv/bin/python scripts/read_scale.py --scale-id scale-horti-1 --watch
+```
+
+Sem `--watch`, o script faz uma única leitura. Encerre o monitor com `Ctrl+C`. O comando `scripts/troubleshoot_scale.py --read-api` continua disponível para três tentativas acompanhadas de eventos USB do kernel.
+
+Para isolar o bridge e ler a serial diretamente, faça isso somente em uma janela sem pesagem, com o serviço parado. O script recusa `--direct` quando o serviço está ativo:
+
+```bash
+sudo systemctl stop pdv-device-bridge
+sudo ./.venv/bin/python scripts/read_scale.py --scale-id scale-horti-1 --direct --watch
+# Ctrl+C para encerrar
+sudo systemctl start pdv-device-bridge
+```
+
+Ausência de bytes aparece como erro de comunicação, nunca como prato vazio. Um quadro válido com peso zero aparece como `state=empty`.
+
 - Leitura da balança: timeout serial `800ms` e limite da operação `2500ms`, comando `0x04 0x05`, até `200` bytes; encerra em `CR/LF` ou após `30ms` sem novos bytes. Apenas um quadro serial válido com peso zero retorna `state=empty`, `grams=0` e HTTP `200`. Ausência de bytes, payload não reconhecido e falhas seriais retornam HTTP `502` e degradam `/health`. Um payload inválido é registrado em hexadecimal no log para diagnóstico do protocolo. Uma leitura válida posterior recupera a saúde.
 - O stream SSE faz leituras novas enquanto houver assinantes, com uma única rotina por balança. Para avaliar a meta de 500 ms, use `scripts/troubleshoot_scale.py --read-api` para ver a duração HTTP e filme a colocação do item junto com a tela do PDV. Ajuste `scale.read_timeout_ms` no Raspberry somente após medir as respostas reais; o padrão de 800 ms pode impedir essa meta quando a balança não responde.
 - A porta da balança permanece aberta entre consultas e é reaberta se o caminho USB mudar ou uma operação serial falhar. Assim o adaptador não precisa ser aberto a cada atualização da tela.
